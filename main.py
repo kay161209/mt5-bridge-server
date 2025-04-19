@@ -1,0 +1,51 @@
+# main.py
+import os
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from MetaTrader5 import initialize, shutdown, order_send
+from app.routes import router as api_router
+from app.mt5 import init_mt5, shutdown_mt5
+
+TOKEN = os.getenv("BRIDGE_TOKEN")
+MT5_PATH = r"C:\MetaTrader5\terminal64.exe"    # インストール先に合わせる
+
+app = FastAPI(
+    title="MT5 Bridge API",
+    version="1.0.0",
+    docs_url="/docs", redoc_url="/redoc",
+)
+
+app.include_router(api_router, prefix="/v5")
+
+def check_token(x_api_token: str | None):
+    if x_api_token != TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+@app.on_event("startup")
+def _startup():
+    init_mt5()
+
+@app.on_event("shutdown")
+def _shutdown():
+    shutdown_mt5()
+
+@app.post("/v5/private/order/create")
+def place_order(req: dict, x_api_token: str | None = Header(None)):
+    check_token(x_api_token)
+    # req → MT5 フォーマットへ変換して発注
+    result = order_send({...})
+    return {"retCode":0,"result":result}
+
+@app.websocket("/ws")
+async def ws_endpoint(ws: WebSocket):
+    await ws.accept()
+    try:
+        token = ws.query_params.get("token")
+        if token != TOKEN:
+            await ws.close(code=4001)
+            return
+        while True:
+            data = await ws.receive_text()
+            # ここで MT5 の最新価格や発注結果を Push
+            await ws.send_text("pong:"+data)
+    except WebSocketDisconnect:
+        pass
