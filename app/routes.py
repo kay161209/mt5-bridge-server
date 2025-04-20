@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect, Depends, BackgroundTasks
 from app.config import settings
 from app import mt5
 from app.models import (
@@ -8,8 +8,10 @@ from app.models import (
     SymbolTickResponse, SymbolSelectRequest, MarketBookRequest, MarketBookResponse,
     TicksRequest, TicksRangeRequest, TicksResponse, OrderRequest, OrderCheckResponse,
     OrderSendResponse, PositionsRequest, PositionsResponse, HistoryOrdersRequest,
-    HistoryOrdersResponse, HistoryDealsRequest, HistoryDealsResponse, CandlesRangeRequest
+    HistoryOrdersResponse, HistoryDealsRequest, HistoryDealsResponse, CandlesRangeRequest,
+    SessionCreateRequest, SessionCreateResponse, SessionsListResponse
 )
+from app.session_manager import get_session_manager
 from typing import List, Optional
 import asyncio
 import json
@@ -20,6 +22,118 @@ router = APIRouter()
 def _auth(token: str | None):
     if token != settings.bridge_token:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+# ----- セッション管理エンドポイント ----- #
+
+@router.post("/session/create", response_model=SessionCreateResponse)
+def create_session(req: SessionCreateRequest, x_api_token: str | None = Header(None)):
+    """新しいMT5セッションを作成"""
+    _auth(x_api_token)
+    
+    try:
+        session_manager = get_session_manager()
+        session_id = session_manager.create_session(
+            login=req.login,
+            password=req.password,
+            server=req.server
+        )
+        return {
+            "session_id": session_id,
+            "success": True
+        }
+    except Exception as e:
+        return {
+            "session_id": "",
+            "success": False,
+            "message": str(e)
+        }
+
+@router.get("/session/list", response_model=SessionsListResponse)
+def list_sessions(x_api_token: str | None = Header(None)):
+    """アクティブなセッションのリストを取得"""
+    _auth(x_api_token)
+    
+    session_manager = get_session_manager()
+    return {"sessions": session_manager.get_all_sessions()}
+
+@router.delete("/session/{session_id}")
+def close_session(session_id: str, x_api_token: str | None = Header(None)):
+    """指定されたセッションを終了"""
+    _auth(x_api_token)
+    
+    session_manager = get_session_manager()
+    success = session_manager.close_session(session_id)
+    return {"success": success}
+
+@router.delete("/session")
+def close_all_sessions(x_api_token: str | None = Header(None), background_tasks: BackgroundTasks = None):
+    """すべてのセッションを終了"""
+    _auth(x_api_token)
+    
+    session_manager = get_session_manager()
+    
+    if background_tasks:
+        # バックグラウンドで終了処理を行う
+        background_tasks.add_task(session_manager.close_all_sessions)
+        return {"success": True, "message": "セッション終了処理をバックグラウンドで実行中"}
+    else:
+        count = session_manager.close_all_sessions()
+        return {"success": True, "closed_count": count}
+
+# ----- セッションIDを指定するバージョンのエンドポイント ----- #
+
+@router.post("/{session_id}/order/create", response_model=OrderResponse)
+def session_order_create(session_id: str, req: OrderCreate, x_api_token: str | None = Header(None)):
+    """指定セッションで注文を発注"""
+    _auth(x_api_token)
+    
+    # セッションを取得
+    try:
+        session_manager = get_session_manager()
+        session_manager.get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    
+    # セッションではMT5はすでに初期化されているので、直接注文発注
+    result = mt5.place_order(req)
+    code = 0 if result > 0 else -1
+    return {"retCode": code, "result": {"ticket": result}}
+
+@router.get("/{session_id}/quote")
+def session_quote(session_id: str, symbol: str, x_api_token: str | None = Header(None)):
+    """指定セッションで価格を取得"""
+    _auth(x_api_token)
+    
+    # セッションを取得
+    try:
+        session_manager = get_session_manager()
+        session_manager.get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    
+    return mt5.get_price(symbol)
+
+@router.post("/{session_id}/candles", response_model=CandleResponse)
+def session_get_candles(session_id: str, req: CandleRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでローソク足データを取得"""
+    _auth(x_api_token)
+    
+    # セッションを取得
+    try:
+        session_manager = get_session_manager()
+        session_manager.get_session(session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    
+    candles = mt5.get_candles(
+        symbol=req.symbol,
+        timeframe=req.timeframe,
+        count=req.count,
+        start_time=req.start_time
+    )
+    return {"data": candles}
+
+# 他のセッションエンドポイントはここに追加...
 
 # ---- HTTP エンドポイント ---- #
 

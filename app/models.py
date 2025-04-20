@@ -356,4 +356,27 @@ class CandlesRangeRequest(BaseModel):
     symbol: str
     timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
     date_from: datetime
-    date_to: datetime 
+    date_to: datetime
+
+# セッション関連モデル
+
+class SessionCreateRequest(BaseModel):
+    login: int
+    password: str
+    server: str
+
+class SessionCreateResponse(BaseModel):
+    session_id: str
+    success: bool
+    message: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    id: str
+    login: int
+    server: str
+    created_at: str
+    last_accessed: str
+    age_seconds: float
+
+class SessionsListResponse(BaseModel):
+    sessions: Dict[str, SessionResponse] 
