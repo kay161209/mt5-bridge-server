@@ -6,12 +6,18 @@ import shutil
 from typing import NamedTuple, Dict, Optional
 import MetaTrader5 as mt5
 from datetime import datetime
+import logging
+
+# ロガー設定
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("session_manager")
 
 class Session(NamedTuple):
     id: str
     login: int
     server: str
     proc: subprocess.Popen
+    port: int
     created_at: datetime
     last_accessed: datetime
 
@@ -27,9 +33,13 @@ class SessionManager:
         self._sessions: Dict[str, Session] = {}
         self.base_path = base_path
         self.portable_mt5_path = portable_mt5_path
+        self._next_port = 8000
         
         # 基本ディレクトリがなければ作成
         os.makedirs(base_path, exist_ok=True)
+        
+        logger.info(f"SessionManager initialized: base_path={base_path}, mt5_path={portable_mt5_path}")
+        logger.info(f"MT5パスが存在するか: {os.path.exists(portable_mt5_path)}")
     
     def create_session(self, login: int, password: str, server: str) -> str:
         """
@@ -50,46 +60,93 @@ class SessionManager:
         session_dir = os.path.join(self.base_path, sid)
         os.makedirs(session_dir, exist_ok=True)
         
-        # ポータブル版MT5をセッションディレクトリにコピー
-        mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
-        shutil.copy2(self.portable_mt5_path, mt5_exec_path)
+        # このセッション用のポートを割り当て
+        port = self._next_port
+        self._next_port += 1
         
-        # MT5プロセスを起動
-        proc = subprocess.Popen([mt5_exec_path], cwd=session_dir)
+        # MT5インストールディレクトリのパス
+        mt5_install_dir = os.path.dirname(self.portable_mt5_path)
         
-        # プロセスが起動するまで少し待機
-        time.sleep(5)
+        logger.info(f"新規セッション作成: id={sid}, login={login}, server={server}, port={port}")
+        logger.info(f"MT5インストールディレクトリ: {mt5_install_dir}")
+        logger.info(f"セッションディレクトリ: {session_dir}")
         
-        # MT5に接続
-        if not mt5.initialize(path=mt5_exec_path, login=login, password=password, server=server):
-            # エラーがあればプロセスを終了し、ディレクトリを削除
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        try:
+            # 方法1: /portable オプションを使用
+            # MT5プロセスを起動 (ポータブルモードとポート指定)
+            cmd = [self.portable_mt5_path, f"/portable:{session_dir}", f"/port:{port}"]
+            logger.info(f"実行コマンド: {' '.join(cmd)}")
             
+            proc = subprocess.Popen(
+                cmd,
+                cwd=mt5_install_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            logger.info(f"MT5プロセス起動: PID={proc.pid}")
+            
+            # プロセスが起動するまで待機 (15秒に延長)
+            logger.info("MT5プロセス起動待機中...")
+            time.sleep(15)
+            
+            # MT5に接続
+            logger.info("MT5初期化開始...")
+            if not mt5.initialize(path=self.portable_mt5_path, login=login, password=password, server=server):
+                # エラーがあればプロセスを終了し、ディレクトリを削除
+                error = mt5.last_error()
+                logger.error(f"MT5初期化エラー: {error}")
+                
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                
+                try:
+                    shutil.rmtree(session_dir)
+                except Exception as e:
+                    logger.error(f"セッションディレクトリ削除エラー: {e}")
+                    
+                raise RuntimeError(f"MT5 初期化エラー: {error[0]} - {error[1]}")
+            
+            logger.info("MT5初期化成功")
+            
+            # セッション情報を保存
+            now = datetime.now()
+            session = Session(
+                id=sid,
+                login=login,
+                server=server,
+                proc=proc,
+                port=port,
+                created_at=now,
+                last_accessed=now
+            )
+            self._sessions[sid] = session
+            
+            return sid
+            
+        except Exception as e:
+            logger.exception(f"セッション作成中に例外発生: {e}")
+            
+            # クリーンアップ
+            try:
+                if 'proc' in locals() and proc:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+            except:
+                pass
+                
             try:
                 shutil.rmtree(session_dir)
             except:
                 pass
                 
-            error = mt5.last_error()
-            raise RuntimeError(f"MT5 初期化エラー: {error[0]} - {error[1]}")
-        
-        # セッション情報を保存
-        now = datetime.now()
-        session = Session(
-            id=sid,
-            login=login,
-            server=server,
-            proc=proc,
-            created_at=now,
-            last_accessed=now
-        )
-        self._sessions[sid] = session
-        
-        return sid
+            raise
     
     def get_session(self, sid: str) -> Session:
         """
@@ -125,26 +182,35 @@ class SessionManager:
             return False
         
         session = self._sessions.pop(sid)
+        logger.info(f"セッション終了: {sid}")
         
         # MT5接続をシャットダウン
-        mt5.shutdown()
+        try:
+            mt5.shutdown()
+            logger.info("MT5シャットダウン完了")
+        except Exception as e:
+            logger.error(f"MT5シャットダウンエラー: {e}")
         
         # プロセスを終了
         try:
+            logger.info(f"プロセス終了: PID={session.proc.pid}")
             session.proc.terminate()
             try:
                 session.proc.wait(timeout=5)
+                logger.info("プロセス正常終了")
             except subprocess.TimeoutExpired:
+                logger.warning("プロセス強制終了")
                 session.proc.kill()
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"プロセス終了エラー: {e}")
         
         # セッションディレクトリを削除
         try:
             session_dir = os.path.join(self.base_path, sid)
+            logger.info(f"セッションディレクトリ削除: {session_dir}")
             shutil.rmtree(session_dir)
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"ディレクトリ削除エラー: {e}")
         
         return True
     
@@ -155,6 +221,7 @@ class SessionManager:
                 "id": s.id,
                 "login": s.login,
                 "server": s.server,
+                "port": s.port,
                 "created_at": s.created_at.isoformat(),
                 "last_accessed": s.last_accessed.isoformat(),
                 "age_seconds": (datetime.now() - s.created_at).total_seconds()
@@ -177,6 +244,8 @@ class SessionManager:
             if (now - session.last_accessed).total_seconds() > max_age_seconds
         ]
         
+        logger.info(f"{len(sessions_to_close)}個の期限切れセッションをクリーンアップします")
+        
         for sid in sessions_to_close:
             self.close_session(sid)
         
@@ -190,6 +259,8 @@ class SessionManager:
             終了したセッション数
         """
         session_ids = list(self._sessions.keys())
+        logger.info(f"{len(session_ids)}個のセッションをすべて終了します")
+        
         for sid in session_ids:
             self.close_session(sid)
         
