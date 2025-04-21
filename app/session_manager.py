@@ -26,6 +26,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("session_manager")
 
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 class Session(NamedTuple):
     id: str
     login: int
