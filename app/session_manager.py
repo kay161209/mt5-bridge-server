@@ -3,16 +3,27 @@ import subprocess
 import time
 import os
 import shutil
-from typing import NamedTuple, Dict, Optional
+from typing import NamedTuple, Dict, Optional, Any, Tuple
 import MetaTrader5 as mt5
 from datetime import datetime
 import logging
 import glob
 import zipfile
 import io
+import sys
+import traceback
+import json
+import platform
 
-# ロガー設定
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# ロガー設定をより詳細に
+logging.basicConfig(
+    level=logging.DEBUG,  # より詳細なログレベル
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('mt5_session.log')  # ファイルにもログを出力
+    ]
+)
 logger = logging.getLogger("session_manager")
 
 class Session(NamedTuple):
@@ -24,6 +35,43 @@ class Session(NamedTuple):
     mt5_path: str  # セッション固有のMT5パス
     created_at: datetime
     last_accessed: datetime
+
+# MT5 APIの詳細なエラーメッセージとコード
+MT5_ERROR_CODES = {
+    -10005: "IPC タイムアウト - プロセス間通信がタイムアウトしました。MT5との接続確立に失敗しました。",
+    -10004: "IPC 初期化エラー - プロセス間通信の初期化に失敗しました。",
+    -10003: "IPC テストソケット作成エラー - テスト用ソケットの作成に失敗しました。",
+    -10002: "IPC データソケット作成エラー - データ通信用ソケットの作成に失敗しました。",
+    -10001: "IPC イベントソケット作成エラー - イベント通知用ソケットの作成に失敗しました。",
+    -10000: "IPC エラー - プロセス間通信の一般的なエラーです。",
+    -9999: "起動パスが見つかりません - MetaTrader 5の実行パスが見つかりませんでした。",
+    -8: "バッファ不足 - データを受信するためのバッファが不足しています。",
+    -7: "構造が小さすぎる - データ構造のサイズが不足しています。",
+    -6: "データなし - 要求されたデータがありません。",
+    -5: "内部エラー - MetaTrader 5 ターミナル内部のエラーです。",
+    -4: "メモリ不足 - 関数を実行するためのメモリが不足しています。",
+    -3: "無効なパラメータ - 関数に無効なパラメータが渡されました。",
+    -2: "ターミナルとの通信が確立されていません。",
+    -1: "不明なエラー - 原因不明のエラーが発生しました。",
+    0: "エラーなし - 操作は正常に完了しました。",
+}
+
+def get_detailed_error(error_code: int, error_message: str) -> str:
+    """MT5エラーコードの詳細な説明を取得"""
+    detailed_explanation = MT5_ERROR_CODES.get(error_code, "不明なエラーコードです")
+    return f"エラーコード: {error_code}, メッセージ: {error_message}\n詳細説明: {detailed_explanation}"
+
+def get_system_info() -> Dict[str, Any]:
+    """システム情報を収集"""
+    return {
+        "os": platform.system(),
+        "os_version": platform.version(),
+        "python_version": platform.python_version(),
+        "architecture": platform.architecture(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "memory": None,  # 必要に応じてpsutilでメモリ情報を取得可能
+    }
 
 class SessionManager:
     def __init__(self, base_path: str, portable_mt5_path: str):
@@ -42,6 +90,10 @@ class SessionManager:
         # テンプレートディレクトリ - MT5の最小構成をあらかじめコピーしておく場所
         self.template_dir = os.path.join(base_path, "_template")
         
+        # システム情報をログに出力
+        sys_info = get_system_info()
+        logger.info(f"システム情報: {json.dumps(sys_info, indent=2)}")
+        
         # 基本ディレクトリがなければ作成
         os.makedirs(base_path, exist_ok=True)
         
@@ -50,6 +102,11 @@ class SessionManager:
             logger.error(f"MT5ポータブル版が見つかりません: {portable_mt5_path}")
         else:
             logger.info(f"MT5ポータブル版が見つかりました: {portable_mt5_path}")
+            # ファイルの詳細情報
+            file_size = os.path.getsize(portable_mt5_path)
+            logger.info(f"  - ファイルサイズ: {file_size} バイト")
+            file_permissions = oct(os.stat(portable_mt5_path).st_mode & 0o777)
+            logger.info(f"  - ファイル権限: {file_permissions}")
         
         # MT5のインストールディレクトリを取得
         self.mt5_install_dir = os.path.dirname(self.portable_mt5_path)
@@ -59,7 +116,7 @@ class SessionManager:
             logger.info(f"MT5インストールディレクトリが見つかりました: {self.mt5_install_dir}")
             # ディレクトリ内のファイル一覧を表示
             files = os.listdir(self.mt5_install_dir)
-            logger.info(f"MT5インストールディレクトリのファイル一覧: {files}")
+            logger.debug(f"MT5インストールディレクトリのファイル一覧: {files}")
         
         # テンプレートディレクトリが存在しなければ作成
         self._prepare_template_directory()
@@ -126,7 +183,9 @@ CertInstall=0
 NewsEnable=0
 AutoUpdate=0
 """
-            with open(os.path.join(self.template_dir, "Config", "terminal.ini"), "w") as f:
+            config_dir = os.path.join(self.template_dir, "Config")
+            os.makedirs(config_dir, exist_ok=True)
+            with open(os.path.join(config_dir, "terminal.ini"), "w") as f:
                 f.write(terminal_ini_content)
                 
             # 必要に応じて追加のディレクトリを作成
@@ -137,6 +196,127 @@ AutoUpdate=0
         except Exception as e:
             logger.exception(f"テンプレートディレクトリの作成中にエラーが発生しました: {e}")
             # エラー時でもセッション作成は続行できるよう、例外は再送出しない
+    
+    def _run_mt5_process(self, mt5_exec_path: str, session_dir: str, port: int) -> Tuple[subprocess.Popen, Any]:
+        """MT5プロセスを起動して出力を記録する"""
+        # MT5プロセスを起動 (ポート指定)
+        cmd = [mt5_exec_path, f"/port:{port}"]
+        logger.info(f"実行コマンド: {' '.join(cmd)}")
+        
+        # 出力を取得するためのパイプを設定
+        proc = subprocess.Popen(
+            cmd,
+            cwd=session_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors='replace'
+        )
+        
+        logger.info(f"MT5プロセス起動: PID={proc.pid}")
+        
+        # 非ブロッキングで出力を読み取る試み
+        stdout_data = ""
+        stderr_data = ""
+        
+        # プロセス起動中に出力を読み取る
+        try:
+            # 一定時間待機
+            time.sleep(5)
+            
+            # 標準出力・標準エラー出力を読み取り（非ブロッキング）
+            if proc.stdout:
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    stdout_data += line
+                    logger.debug(f"MT5 STDOUT: {line.strip()}")
+            
+            if proc.stderr:
+                while True:
+                    line = proc.stderr.readline()
+                    if not line:
+                        break
+                    stderr_data += line
+                    logger.debug(f"MT5 STDERR: {line.strip()}")
+        except Exception as e:
+            logger.warning(f"プロセス出力の読み取り中にエラー: {e}")
+        
+        # プロセスの状態を確認
+        returncode = proc.poll()
+        if returncode is not None:
+            logger.error(f"MT5プロセスが予期せず終了しました。リターンコード: {returncode}")
+            output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
+            logger.error(f"MT5プロセス出力:\n{output}")
+            raise RuntimeError(f"MT5プロセスが起動に失敗しました。リターンコード: {returncode}")
+        
+        return proc, {"stdout": stdout_data, "stderr": stderr_data}
+    
+    def _initialize_mt5(self, mt5_exec_path: str, login: int, password: str, server: str) -> Dict[str, Any]:
+        """MT5を初期化し、詳細な結果を返す"""
+        logger.info("MT5初期化開始...")
+        logger.info(f"MT5パス: {mt5_exec_path}")
+        logger.info(f"ログイン: {login}, サーバー: {server}")
+        
+        # MT5の初期化前にmt5モジュールの状態をチェック
+        try:
+            mt5_initialized = mt5.initialize() if not mt5.initialize.__self__.terminal_info() else True
+            if mt5_initialized:
+                logger.info("MT5は既に初期化されています。シャットダウンします。")
+                mt5.shutdown()
+                time.sleep(2)
+        except Exception as e:
+            logger.warning(f"MT5初期状態チェック中にエラー: {e}")
+        
+        # 初期化を試行
+        start_time = time.time()
+        success = False
+        error_code = None
+        error_message = None
+        
+        try:
+            success = mt5.initialize(
+                path=mt5_exec_path,
+                login=login,
+                password=password,
+                server=server,
+                timeout=60000  # タイムアウトを60秒に設定
+            )
+            
+            if not success:
+                error = mt5.last_error()
+                error_code = error[0]
+                error_message = error[1]
+                logger.error(f"MT5初期化エラー: {error}")
+                logger.error(f"詳細: {get_detailed_error(error_code, error_message)}")
+            else:
+                # 成功した場合、接続情報を取得
+                logger.info("MT5初期化成功")
+                try:
+                    terminal_info = mt5.terminal_info()
+                    account_info = mt5.account_info()
+                    
+                    logger.info(f"ターミナル情報: 接続={terminal_info.connected}, 取引許可={terminal_info.trade_allowed}")
+                    if account_info:
+                        logger.info(f"口座情報: ログインID={account_info.login}, サーバー={account_info.server}")
+                except Exception as e:
+                    logger.warning(f"MT5情報取得中にエラー: {e}")
+        except Exception as e:
+            logger.exception(f"MT5初期化中に例外が発生: {e}")
+            error_message = str(e)
+            error_code = -99999
+            success = False
+        
+        elapsed_time = time.time() - start_time
+        logger.info(f"MT5初期化処理時間: {elapsed_time:.2f}秒")
+        
+        return {
+            "success": success,
+            "error_code": error_code,
+            "error_message": error_message,
+            "elapsed_time": elapsed_time
+        }
     
     def create_session(self, login: int, password: str, server: str) -> str:
         """
@@ -210,29 +390,33 @@ ProxyEnable=0
             
             logger.info(f"MT5実行ファイルが存在します: {mt5_exec_path}")
             
-            # MT5プロセスを起動 (ポート指定)
-            cmd = [mt5_exec_path, f"/port:{port}"]
-            logger.info(f"実行コマンド: {' '.join(cmd)}")
+            # MT5プロセスを起動して出力を取得
+            proc, process_output = self._run_mt5_process(mt5_exec_path, session_dir, port)
             
-            proc = subprocess.Popen(
-                cmd,
-                cwd=session_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
-            logger.info(f"MT5プロセス起動: PID={proc.pid}")
-            
-            # プロセスが起動するまで待機 (30秒に延長)
-            logger.info("MT5プロセス起動待機中...")
-            time.sleep(30)
+            # プロセスが起動するまで待機
+            logger.info("MT5プロセス起動待機中... (60秒)")
+            time.sleep(60)  # より長い待機時間
             
             # MT5に接続
-            logger.info("MT5初期化開始...")
-            if not mt5.initialize(path=mt5_exec_path, login=login, password=password, server=server):
+            init_result = self._initialize_mt5(mt5_exec_path, login, password, server)
+            
+            if not init_result["success"]:
                 # エラーがあればプロセスを終了し、ディレクトリを削除
-                error = mt5.last_error()
-                logger.error(f"MT5初期化エラー: {error}")
+                error_code = init_result["error_code"]
+                error_message = init_result["error_message"]
+                
+                # より詳細なエラー情報を作成
+                error_detail = {
+                    "error_code": error_code,
+                    "error_message": error_message,
+                    "detailed_error": get_detailed_error(error_code, error_message),
+                    "process_output": process_output,
+                    "session_dir": session_dir,
+                    "mt5_path": mt5_exec_path,
+                    "elapsed_time": init_result["elapsed_time"]
+                }
+                
+                logger.error(f"MT5初期化エラーの詳細: {json.dumps(error_detail, indent=2)}")
                 
                 proc.terminate()
                 try:
@@ -241,11 +425,18 @@ ProxyEnable=0
                     proc.kill()
                 
                 try:
-                    shutil.rmtree(session_dir)
-                except Exception as e:
-                    logger.error(f"セッションディレクトリ削除エラー: {e}")
+                    # エラー情報を保存
+                    with open(os.path.join(session_dir, "error_log.json"), "w") as f:
+                        json.dump(error_detail, f, indent=2)
                     
-                raise RuntimeError(f"MT5 初期化エラー: {error[0]} - {error[1]}")
+                    # ディレクトリは削除せず、エラー診断のために残す
+                    # shutil.rmtree(session_dir)
+                    logger.info(f"エラー診断用にセッションディレクトリを保持: {session_dir}")
+                except Exception as e:
+                    logger.error(f"エラーログ保存中に例外発生: {e}")
+                    
+                detailed_error = get_detailed_error(error_code, error_message)
+                raise RuntimeError(f"MT5 初期化エラー: {error_code} - {error_message}\n{detailed_error}")
             
             logger.info("MT5初期化成功")
             
@@ -268,6 +459,10 @@ ProxyEnable=0
         except Exception as e:
             logger.exception(f"セッション作成中に例外発生: {e}")
             
+            # スタックトレースをログに記録
+            trace = traceback.format_exc()
+            logger.error(f"スタックトレース: {trace}")
+            
             # クリーンアップ
             try:
                 if 'proc' in locals() and proc:
@@ -279,10 +474,11 @@ ProxyEnable=0
             except:
                 pass
                 
-            try:
-                shutil.rmtree(session_dir)
-            except:
-                pass
+            # エラー診断用にディレクトリを残す
+            # try:
+            #     shutil.rmtree(session_dir)
+            # except:
+            #     pass
                 
             raise
     
