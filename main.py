@@ -8,7 +8,7 @@ from app.session_manager import init_session_manager, get_session_manager
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# ロガー設定
+# Logger configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("main")
 
@@ -26,14 +26,14 @@ def check_token(x_api_token: str | None):
 
 @app.on_event("startup")
 async def _startup():
-    logger.info("サーバー起動中...")
+    logger.info("Server starting up...")
     
-    # セッションマネージャーの初期化
-    logger.info(f"セッションマネージャー初期化: {settings.sessions_base_path}, {settings.mt5_portable_path}")
+    # Initialize session manager
+    logger.info(f"Initializing session manager: {settings.sessions_base_path}, {settings.mt5_portable_path}")
     init_session_manager(settings.sessions_base_path, settings.mt5_portable_path)
     
-    # 定期的なセッションクリーンアップの設定
-    logger.info(f"クリーンアップスケジューラ設定: {settings.cleanup_interval}秒間隔")
+    # Set up periodic session cleanup
+    logger.info(f"Setting up cleanup scheduler: {settings.cleanup_interval} seconds interval")
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         cleanup_old_sessions,
@@ -43,37 +43,37 @@ async def _startup():
     )
     scheduler.start()
     
-    logger.info("サーバー起動完了")
+    logger.info("Server startup complete")
 
 @app.on_event("shutdown")
 async def _shutdown():
-    logger.info("サーバーシャットダウン中...")
+    logger.info("Server shutting down...")
     
-    # すべてのセッションをクリーンアップ
+    # Clean up all sessions
     try:
         session_manager = get_session_manager()
         count = session_manager.close_all_sessions()
-        logger.info(f"{count}個のセッションをクリーンアップしました")
+        logger.info(f"Cleaned up {count} sessions")
     except Exception as e:
-        logger.error(f"セッションクリーンアップエラー: {e}")
+        logger.error(f"Session cleanup error: {e}")
     
-    logger.info("サーバーシャットダウン完了")
+    logger.info("Server shutdown complete")
 
 async def cleanup_old_sessions():
-    """期限切れセッションのクリーンアップを行うバックグラウンドタスク"""
+    """Background task to clean up expired sessions"""
     try:
         session_manager = get_session_manager()
         count = session_manager.cleanup_old_sessions(max_age_seconds=settings.session_inactive_timeout)
         if count > 0:
-            logger.info(f"{count}個の期限切れセッションをクリーンアップしました")
+            logger.info(f"Cleaned up {count} expired sessions")
     except Exception as e:
-        logger.error(f"セッションクリーンアップエラー: {e}")
+        logger.error(f"Session cleanup error: {e}")
 
-# 以下のエンドポイントは削除し、app/routes.pyのセッションベースのものに置き換える
+# The following endpoints have been removed and replaced with session-based ones in app/routes.py
 # @app.post("/v5/private/order/create")
 # def place_order(req: dict, x_api_token: str | None = Header(None)):
 #     check_token(x_api_token)
-#     # req → MT5 フォーマットへ変換して発注
+#     # req → MT5 format conversion and order placement
 #     result = order_send({...})
 #     return {"retCode":0,"result":result}
 
@@ -86,8 +86,8 @@ async def ws_endpoint(ws: WebSocket):
             await ws.close(code=4001)
             return
         
-        # WebSocketセッションはセッションベースに変更する必要がある
-        # ここでは単純なpingに応答するだけの実装に変更
+        # WebSocket session needs to be changed to session-based
+        # This is a simple implementation that just responds to pings
         while True:
             data = await ws.receive_text()
             await ws.send_text("pong:"+data)
