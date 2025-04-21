@@ -27,10 +27,10 @@ def check_token(x_api_token: str | None):
 
 @app.on_event("startup")
 async def _startup():
-    # 通常のMT5初期化（従来のシングルセッション用）
-    init_mt5()
+    # グローバルなMT5初期化は不要
+    # init_mt5() <- この行を削除
     
-    # セッションマネージャーの初期化
+    # セッションマネージャーの初期化のみ行う
     init_session_manager(settings.sessions_base_path, settings.mt5_portable_path)
     
     # 定期的なセッションクリーンアップの設定
@@ -45,8 +45,8 @@ async def _startup():
 
 @app.on_event("shutdown")
 async def _shutdown():
-    # メインのMT5接続をシャットダウン
-    shutdown_mt5()
+    # グローバルなMT5シャットダウンも不要
+    # shutdown_mt5() <- この行を削除
     
     # すべてのセッションをクリーンアップ
     try:
