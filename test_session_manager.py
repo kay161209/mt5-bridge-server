@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 import traceback
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -51,6 +52,54 @@ MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = os.getenv("MT5_SERVER", "")
 
+# MT5プロセスを直接起動するためのオーバーライドメソッド
+def custom_run_mt5_process(mt5_exec_path, session_dir, port):
+    """MT5プロセスをGUIなしで起動する"""
+    logger.info("カスタムMT5プロセス起動を使用")
+    
+    # バックグラウンドでMT5を起動するコマンド
+    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate", "/config:config.ini"]
+    logger.info(f"実行コマンド: {' '.join(cmd)}")
+    
+    try:
+        # Windows環境ではDETACHED_PROCESSフラグでGUIなしで実行
+        creation_flags = 0
+        if os.name == 'nt':
+            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        
+        proc = subprocess.Popen(
+            cmd,
+            cwd=session_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            creationflags=creation_flags
+        )
+        
+        logger.info(f"MT5プロセスが起動しました: PID={proc.pid}")
+        
+        # 出力の読み取り
+        stdout_data = ""
+        stderr_data = ""
+        
+        # しばらく待機してプロセスの起動を確認
+        time.sleep(5)
+        
+        # プロセスの状態を確認
+        returncode = proc.poll()
+        if returncode is not None:
+            logger.error(f"MT5プロセスが予期せず終了しました。リターンコード: {returncode}")
+            output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
+            logger.error(f"MT5プロセス出力:\n{output}")
+            raise RuntimeError(f"MT5プロセスの起動に失敗しました。リターンコード: {returncode}")
+        
+        return proc, {"stdout": stdout_data, "stderr": stderr_data}
+    except Exception as e:
+        logger.exception(f"MT5プロセス起動中にエラーが発生しました: {e}")
+        raise
+
 def test_session_manager():
     """SessionManagerを使用してMT5セッションを作成・初期化するテスト"""
     logger.info("=" * 50)
@@ -81,6 +130,11 @@ def test_session_manager():
     try:
         logger.info("SessionManagerを初期化します...")
         session_manager = SessionManager(SESSIONS_BASE_PATH, MT5_PORTABLE_PATH)
+        
+        # MT5プロセス起動メソッドをオーバーライド（モンキーパッチ）
+        session_manager._run_mt5_process = custom_run_mt5_process
+        logger.info("カスタムMT5起動メソッドを設定しました")
+        
         logger.info("SessionManager初期化成功")
     except Exception as e:
         logger.exception(f"SessionManager初期化中にエラーが発生しました: {e}")
