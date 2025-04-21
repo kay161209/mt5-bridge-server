@@ -8,6 +8,8 @@ import MetaTrader5 as mt5
 from datetime import datetime
 import logging
 import glob
+import zipfile
+import io
 
 # ロガー設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -71,36 +73,70 @@ class SessionManager:
             return
         
         logger.info(f"テンプレートディレクトリを作成します: {self.template_dir}")
+        if os.path.exists(self.template_dir):
+            shutil.rmtree(self.template_dir)
         os.makedirs(self.template_dir, exist_ok=True)
         
-        # 最小限必要なファイルとディレクトリだけをコピー
-        # MT5の最小構成
-        required_items = [
-            "terminal64.exe",
-            "*.dll",
-            "Config",
-            "MQL5/Libraries"
-        ]
-        
-        for pattern in required_items:
-            items = glob.glob(os.path.join(self.mt5_install_dir, pattern))
-            for item_path in items:
-                item_name = os.path.basename(item_path)
-                target_path = os.path.join(self.template_dir, item_name)
+        # MT5のルートディレクトリからすべての必要なファイルをコピー
+        try:
+            # まず基本的な実行ファイルとDLLをコピー
+            basic_files = ["terminal64.exe", "*.dll"]
+            for pattern in basic_files:
+                for file_path in glob.glob(os.path.join(self.mt5_install_dir, pattern)):
+                    file_name = os.path.basename(file_path)
+                    target_path = os.path.join(self.template_dir, file_name)
+                    logger.info(f"基本ファイルコピー: {file_path} -> {target_path}")
+                    shutil.copy2(file_path, target_path)
+            
+            # 重要なディレクトリ構造をコピー
+            # ポータブルモードで必須のディレクトリ
+            dirs_to_copy = ["Config", "MQL5", "Sounds", "Logs", "Profiles", "Templates"]
+            for dir_name in dirs_to_copy:
+                src_dir = os.path.join(self.mt5_install_dir, dir_name)
+                dst_dir = os.path.join(self.template_dir, dir_name)
                 
-                if os.path.isfile(item_path):
-                    logger.info(f"テンプレートにファイルコピー: {item_path} -> {target_path}")
-                    shutil.copy2(item_path, target_path)
-                elif os.path.isdir(item_path):
-                    logger.info(f"テンプレートにディレクトリコピー: {item_path} -> {target_path}")
-                    if os.path.exists(target_path):
-                        shutil.rmtree(target_path)
-                    shutil.copytree(item_path, target_path, symlinks=True)
-        
-        # 空のディレクトリ構造を作成
-        empty_dirs = ["MQL5/Experts", "MQL5/Scripts", "MQL5/Indicators", "logs", "files", "tester"]
-        for dir_path in empty_dirs:
-            os.makedirs(os.path.join(self.template_dir, dir_path), exist_ok=True)
+                if os.path.exists(src_dir):
+                    logger.info(f"ディレクトリ全体をコピー: {src_dir} -> {dst_dir}")
+                    if os.path.exists(dst_dir):
+                        shutil.rmtree(dst_dir)
+                    shutil.copytree(src_dir, dst_dir, symlinks=True)
+                else:
+                    logger.info(f"ディレクトリが存在しないためスキップ: {src_dir}")
+                    # 空のディレクトリを作成
+                    os.makedirs(dst_dir, exist_ok=True)
+            
+            # その他の重要なファイルをコピー
+            other_files = ["portable.ini"]
+            for file_name in other_files:
+                src_path = os.path.join(self.mt5_install_dir, file_name)
+                if os.path.exists(src_path):
+                    dst_path = os.path.join(self.template_dir, file_name)
+                    logger.info(f"その他のファイルコピー: {src_path} -> {dst_path}")
+                    shutil.copy2(src_path, dst_path)
+            
+            # portable_modeファイルを作成（ポータブルモードの指定）
+            with open(os.path.join(self.template_dir, "portable_mode"), "w") as f:
+                f.write("portable")
+            
+            # terminal.ini の作成 (ポータブルモード用設定)
+            terminal_ini_content = """[Common]
+Login=0
+ProxyEnable=0
+CertInstall=0
+NewsEnable=0
+AutoUpdate=0
+"""
+            with open(os.path.join(self.template_dir, "Config", "terminal.ini"), "w") as f:
+                f.write(terminal_ini_content)
+                
+            # 必要に応じて追加のディレクトリを作成
+            for add_dir in ["MQL5/Files", "MQL5/Libraries", "MQL5/Experts", "MQL5/Scripts", "MQL5/Include"]:
+                os.makedirs(os.path.join(self.template_dir, add_dir), exist_ok=True)
+            
+            logger.info("テンプレートディレクトリの準備が完了しました")
+        except Exception as e:
+            logger.exception(f"テンプレートディレクトリの作成中にエラーが発生しました: {e}")
+            # エラー時でもセッション作成は続行できるよう、例外は再送出しない
     
     def create_session(self, login: int, password: str, server: str) -> str:
         """
@@ -119,6 +155,8 @@ class SessionManager:
         
         # セッション用のディレクトリを作成
         session_dir = os.path.join(self.base_path, sid)
+        if os.path.exists(session_dir):
+            shutil.rmtree(session_dir)
         os.makedirs(session_dir, exist_ok=True)
         
         # このセッション用のポートを割り当て
@@ -126,10 +164,14 @@ class SessionManager:
         self._next_port += 1
         
         logger.info(f"新規セッション作成: id={sid}, login={login}, server={server}, port={port}")
-        logger.info(f"MT5インストールディレクトリ: {self.mt5_install_dir}")
         logger.info(f"セッションディレクトリ: {session_dir}")
         
         try:
+            # テンプレートディレクトリが存在するかチェック
+            if not os.path.exists(self.template_dir) or not os.path.isfile(os.path.join(self.template_dir, "terminal64.exe")):
+                logger.warning("テンプレートディレクトリが見つからないか不完全です。再作成します。")
+                self._prepare_template_directory()
+            
             # テンプレートディレクトリからファイルをコピー (高速)
             start_time = time.time()
             logger.info("テンプレートからMT5ファイルをセッションディレクトリにコピー中...")
@@ -143,9 +185,19 @@ class SessionManager:
                 elif os.path.isdir(src_path):
                     shutil.copytree(src_path, dst_path, symlinks=True)
             
-            # 必要なプロファイルファイル作成
-            with open(os.path.join(session_dir, "portable_mode"), "w") as f:
-                f.write("portable")
+            # セッション固有の設定ファイルを上書き
+            config_dir = os.path.join(session_dir, "Config")
+            os.makedirs(config_dir, exist_ok=True)
+            
+            # login.ini の作成 (セッション固有のログイン情報)
+            login_ini_content = f"""[Login]
+Server={server}
+Login={login}
+Password={password}
+ProxyEnable=0
+"""
+            with open(os.path.join(config_dir, "login.ini"), "w") as f:
+                f.write(login_ini_content)
             
             copy_time = time.time() - start_time
             logger.info(f"MT5ファイルのコピーが完了しました (所要時間: {copy_time:.2f}秒)")
@@ -171,9 +223,9 @@ class SessionManager:
             
             logger.info(f"MT5プロセス起動: PID={proc.pid}")
             
-            # プロセスが起動するまで待機 (20秒に延長)
+            # プロセスが起動するまで待機 (30秒に延長)
             logger.info("MT5プロセス起動待機中...")
-            time.sleep(20)
+            time.sleep(30)
             
             # MT5に接続
             logger.info("MT5初期化開始...")
