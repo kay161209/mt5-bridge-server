@@ -210,60 +210,65 @@ AutoUpdate=0
     
     def _run_mt5_process(self, mt5_exec_path: str, session_dir: str, port: int) -> Tuple[subprocess.Popen, Any]:
         """Start MT5 process and record output"""
-        # Start MT5 process (with port specification)
+        # MT5プロセスの起動（ポート指定あり）
         cmd = [mt5_exec_path, f"/port:{port}"]
-        logger.info(f"Execution command: {' '.join(cmd)}")
+        logger.info(f"実行コマンド: {' '.join(cmd)}")
         
-        # Set up pipes to capture output
-        proc = subprocess.Popen(
-            cmd,
-            cwd=session_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='replace'
-        )
-        
-        logger.info(f"MT5 process started: PID={proc.pid}")
-        
-        # Non-blocking attempt to read output
-        stdout_data = ""
-        stderr_data = ""
-        
-        # Read output while process is starting
         try:
-            # Wait a certain amount of time
-            time.sleep(5)
+            # プロセス起動時のエラー処理を強化
+            proc = subprocess.Popen(
+                cmd,
+                cwd=session_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP  # Windowsでのプロセスグループ分離
+            )
             
-            # Read standard output and error (non-blocking)
-            if proc.stdout:
-                while True:
-                    line = proc.stdout.readline()
-                    if not line:
-                        break
-                    stdout_data += line
-                    logger.debug(f"MT5 STDOUT: {line.strip()}")
+            logger.info(f"MT5プロセスが起動しました: PID={proc.pid}")
             
-            if proc.stderr:
-                while True:
-                    line = proc.stderr.readline()
-                    if not line:
-                        break
-                    stderr_data += line
-                    logger.debug(f"MT5 STDERR: {line.strip()}")
+            # Non-blocking attempt to read output
+            stdout_data = ""
+            stderr_data = ""
+            
+            # Read output while process is starting
+            try:
+                # Wait a certain amount of time
+                time.sleep(5)
+                
+                # Read standard output and error (non-blocking)
+                if proc.stdout:
+                    while True:
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+                        stdout_data += line
+                        logger.debug(f"MT5 STDOUT: {line.strip()}")
+                
+                if proc.stderr:
+                    while True:
+                        line = proc.stderr.readline()
+                        if not line:
+                            break
+                        stderr_data += line
+                        logger.debug(f"MT5 STDERR: {line.strip()}")
+            except Exception as e:
+                logger.warning(f"Error while reading process output: {e}")
+            
+            # Check process status
+            returncode = proc.poll()
+            if returncode is not None:
+                logger.error(f"MT5 process terminated unexpectedly. Return code: {returncode}")
+                output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
+                logger.error(f"MT5 process output:\n{output}")
+                raise RuntimeError(f"MT5 process failed to start. Return code: {returncode}")
+            
+            return proc, {"stdout": stdout_data, "stderr": stderr_data}
         except Exception as e:
-            logger.warning(f"Error while reading process output: {e}")
-        
-        # Check process status
-        returncode = proc.poll()
-        if returncode is not None:
-            logger.error(f"MT5 process terminated unexpectedly. Return code: {returncode}")
-            output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
-            logger.error(f"MT5 process output:\n{output}")
-            raise RuntimeError(f"MT5 process failed to start. Return code: {returncode}")
-        
-        return proc, {"stdout": stdout_data, "stderr": stderr_data}
+            logger.exception(f"Error occurred during MT5 process start: {e}")
+            raise
     
     def _initialize_mt5(self, mt5_exec_path: str, login: int, password: str, server: str) -> Dict[str, Any]:
         """Initialize MT5 and return detailed results"""
