@@ -1,16 +1,53 @@
 # main.py
 import os
 import logging
+import sys
+import io
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from app.routes import router as api_router
 from app.config import settings
 from app.session_manager import init_session_manager, get_session_manager
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import codecs
+import json
+import time
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketState
 
-# Logger configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("main")
+# Configure logging first
+os.makedirs('logs', exist_ok=True)
+log_file = os.path.join('logs', 'server.log')
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Configure console handler with UTF-8 encoding
+console_handler = logging.StreamHandler(
+    stream=io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(console_handler)
+
+# Configure file handler with UTF-8 encoding
+file_handler = logging.handlers.RotatingFileHandler(
+    log_file, maxBytes=10485760, backupCount=5, encoding='utf-8'
+)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logger.addHandler(file_handler)
+
+# Ensure sys.stdout and sys.stderr use UTF-8
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# Set default encoding for Python
+if hasattr(sys, 'setdefaultencoding'):
+    sys.setdefaultencoding('utf-8')
+
+# Verify encoding settings
+logger.info(f"システムのデフォルトエンコーディング: {sys.getdefaultencoding()}")
+logger.info(f"ファイルシステムエンコーディング: {sys.getfilesystemencoding()}")
+logger.info(f"標準出力エンコーディング: {sys.stdout.encoding}")
 
 app = FastAPI(
     title="MT5 Bridge API",
@@ -19,6 +56,18 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix="/v5")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Session manager to handle MT5 sessions
+session_manager = None
 
 def check_token(x_api_token: str | None):
     if x_api_token != settings.bridge_token:

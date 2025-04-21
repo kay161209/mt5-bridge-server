@@ -16,18 +16,26 @@ import json
 import platform
 
 # Enhanced logger configuration
-logging.basicConfig(
-    level=logging.DEBUG,  # More detailed log level
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('mt5_session.log', encoding='utf-8')  # Also output logs to file
-    ]
-)
 logger = logging.getLogger("session_manager")
+logger.setLevel(logging.DEBUG)
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+# ファイルハンドラがまだ追加されていない場合のみ追加
+if not logger.handlers:
+    file_handler = logging.FileHandler('mt5_session.log', encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+# 標準出力ハンドラの追加（コンソール出力をUTF-8に設定）
+console_handler = logging.StreamHandler(
+    stream=io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# システムのエンコーディングを確保
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 class Session(NamedTuple):
     id: str
@@ -213,6 +221,7 @@ AutoUpdate=0
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding='utf-8',
             errors='replace'
         )
         
@@ -249,7 +258,7 @@ AutoUpdate=0
         # Check process status
         returncode = proc.poll()
         if returncode is not None:
-            logger.error(f"MT5 process unexpectedly terminated. Return code: {returncode}")
+            logger.error(f"MT5 process terminated unexpectedly. Return code: {returncode}")
             output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
             logger.error(f"MT5 process output:\n{output}")
             raise RuntimeError(f"MT5 process failed to start. Return code: {returncode}")
@@ -284,7 +293,7 @@ AutoUpdate=0
                 login=login,
                 password=password,
                 server=server,
-                timeout=60000  # Set timeout to 60 seconds
+                timeout=120000  # 60秒から120秒に延長
             )
             
             if not success:
@@ -398,7 +407,12 @@ ProxyEnable=0
             
             # Wait for process to start up
             logger.info("Waiting for MT5 process to start... (60 seconds)")
-            time.sleep(60)  # Longer wait time
+            time.sleep(60)  # 30秒から60秒に延長
+            
+            # プロセスの状態を確認
+            if proc.poll() is not None:
+                logger.error("MT5プロセスが予期せず終了しました")
+                # エラー処理
             
             # Connect to MT5
             init_result = self._initialize_mt5(mt5_exec_path, login, password, server)
@@ -419,7 +433,7 @@ ProxyEnable=0
                     "elapsed_time": init_result["elapsed_time"]
                 }
                 
-                logger.error(f"MT5 initialization error details: {json.dumps(error_detail, indent=2)}")
+                logger.error(f"MT5 initialization error details: {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
                 
                 proc.terminate()
                 try:
@@ -429,8 +443,8 @@ ProxyEnable=0
                 
                 try:
                     # Save error information
-                    with open(os.path.join(session_dir, "error_log.json"), "w") as f:
-                        json.dump(error_detail, f, indent=2)
+                    with open(os.path.join(session_dir, "error_log.json"), "w", encoding="utf-8") as f:
+                        json.dump(error_detail, f, indent=2, ensure_ascii=False)
                     
                     # Don't delete the directory, keep it for error diagnosis
                     # shutil.rmtree(session_dir)
