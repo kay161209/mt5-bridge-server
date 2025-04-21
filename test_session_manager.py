@@ -63,37 +63,66 @@ def custom_run_mt5_process(mt5_exec_path, session_dir, port):
     """MT5プロセスをGUIなしで起動する"""
     logger.info("カスタムMT5プロセス起動を使用")
     
-    # バックグラウンドでMT5を起動するコマンド
-    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate"]
+    # バックグラウンドでMT5を起動するコマンド - 非表示モードのフラグを追加
+    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate", "/min"]
     logger.info(f"実行コマンド: {' '.join(cmd)}")
     
     try:
-        # Windows環境ではDETACHED_PROCESSフラグでGUIなしで実行
+        # Windowsの場合はGUIを完全に非表示にするためのフラグを使用
         creation_flags = 0
         if os.name == 'nt':
-            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            # DETACHED_PROCESS - コンソールなし
+            # CREATE_NO_WINDOW - ウィンドウなし（より強力）
+            # CREATE_NEW_PROCESS_GROUP - 新しいプロセスグループ
+            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
         
-        # セッションディレクトリにconfig.iniが存在するか確認
-        config_path = os.path.join(session_dir, "Config", "config.ini")
-        if not os.path.exists(config_path):
-            logger.info(f"config.iniが見つかりません: {config_path}")
-            
-            # Config ディレクトリを確認
-            config_dir = os.path.join(session_dir, "Config")
-            if not os.path.exists(config_dir):
-                os.makedirs(config_dir, exist_ok=True)
-                logger.info(f"Configディレクトリを作成しました: {config_dir}")
-            
-            # 基本的なconfig.iniを作成
-            with open(config_path, "w", encoding="utf-8") as f:
-                f.write("[Common]\n")
-                f.write("Login=0\n")
-                f.write("ProxyEnable=0\n")
-                f.write("NewsEnable=0\n")
-                f.write("AutoUpdate=0\n")
-                f.write("StartupMode=2\n")  # サイレントモード
-            logger.info(f"基本的なconfig.iniファイルを作成しました: {config_path}")
+        # セッションディレクトリの準備
+        # Config ディレクトリを確認
+        config_dir = os.path.join(session_dir, "Config")
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir, exist_ok=True)
+            logger.info(f"Configディレクトリを作成しました: {config_dir}")
         
+        # 1. config.iniの作成 - ウィンドウ設定を追加
+        config_path = os.path.join(config_dir, "config.ini")
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write("[Common]\n")
+            f.write("Login=0\n")
+            f.write("ProxyEnable=0\n")
+            f.write("NewsEnable=0\n")
+            f.write("AutoUpdate=0\n")
+            f.write("StartupMode=2\n")  # サイレントモード
+            f.write("StartupLastMode=2\n")  # 前回のモードも保存
+        logger.info(f"基本的なconfig.iniファイルを作成しました: {config_path}")
+        
+        # 2. terminal.iniの作成 - ウィンドウ設定を追加
+        terminal_path = os.path.join(config_dir, "terminal.ini")
+        with open(terminal_path, "w", encoding="utf-8") as f:
+            f.write("[Window]\n")
+            f.write("Maximized=0\n")
+            f.write("Width=1\n")
+            f.write("Height=1\n")
+            f.write("Left=-10000\n")  # 画面外に配置
+            f.write("Top=-10000\n")   # 画面外に配置
+            f.write("[Common]\n")
+            f.write("Login=0\n")
+            f.write("ProxyEnable=0\n")
+            f.write("AutoUpdate=0\n")
+            f.write("StartupMode=2\n")  # サイレントモード
+        logger.info(f"terminal.iniファイルを作成しました: {terminal_path}")
+        
+        # 3. portable_mode ファイルの作成
+        portable_path = os.path.join(session_dir, "portable_mode")
+        with open(portable_path, "w") as f:
+            f.write("portable")
+        
+        # 4. GUI関連の構成ファイルの調整
+        charts_dir = os.path.join(session_dir, "MQL5", "Files", "Charts")
+        if not os.path.exists(charts_dir):
+            os.makedirs(charts_dir, exist_ok=True)
+        
+        # プロセス開始
+        logger.info(f"MT5を起動します: {' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,
             cwd=session_dir,
@@ -172,6 +201,69 @@ def test_session_manager():
         logger.info("=" * 30)
         logger.info("MT5セッション作成を開始します...")
         start_time = time.time()
+        
+        # ---------- MT5初期化パラメータを調整する機能を追加 ----------
+        # MT5初期化メソッドをオーバーライド
+        original_initialize_mt5 = session_manager._initialize_mt5
+        
+        def custom_initialize_mt5(mt5_exec_path, login, password, server):
+            """カスタムMT5初期化関数"""
+            logger.info("カスタムMT5初期化関数を使用します")
+            
+            # MT5の前回の状態をクリア
+            try:
+                import MetaTrader5 as mt5
+                if mt5.initialize().__self__.terminal_info():
+                    logger.info("既存のMT5接続をシャットダウンします")
+                    mt5.shutdown()
+                    time.sleep(2)
+            except Exception as e:
+                logger.warning(f"既存のMT5シャットダウン中にエラー: {e}")
+            
+            # 初期化の実行
+            logger.info(f"MT5初期化を開始: path={mt5_exec_path}, login={login}, server={server}")
+            try:
+                # 可能なすべてのパラメータを指定して初期化
+                success = mt5.initialize(
+                    path=mt5_exec_path,
+                    login=login,
+                    password=password,
+                    server=server,
+                    timeout=180000,   # 3分
+                    portable=True,    # ポータブルモード
+                    winsock=False,    # WebSocketを使用しない
+                )
+                
+                if success:
+                    logger.info("MT5初期化成功！")
+                    # 接続情報の表示
+                    try:
+                        terminal_info = mt5.terminal_info()
+                        logger.info(f"ターミナル情報: connected={terminal_info.connected}, trade_allowed={terminal_info.trade_allowed}")
+                    except Exception as e:
+                        logger.warning(f"ターミナル情報取得エラー: {e}")
+                else:
+                    error = mt5.last_error()
+                    logger.error(f"MT5初期化エラー: {error}")
+                
+                return {
+                    "success": success,
+                    "error_code": None if success else error[0],
+                    "error_message": None if success else error[1],
+                    "elapsed_time": 0
+                }
+                
+            except Exception as e:
+                logger.exception(f"MT5初期化中に例外が発生: {e}")
+                return {
+                    "success": False,
+                    "error_code": -99999,
+                    "error_message": str(e),
+                    "elapsed_time": 0
+                }
+        
+        # 初期化メソッドの置き換え
+        session_manager._initialize_mt5 = custom_initialize_mt5
         
         # セッション作成
         session_id = session_manager.create_session(
