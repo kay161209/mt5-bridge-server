@@ -7,6 +7,7 @@ from typing import NamedTuple, Dict, Optional
 import MetaTrader5 as mt5
 from datetime import datetime
 import logging
+import glob
 
 # ロガー設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -18,6 +19,7 @@ class Session(NamedTuple):
     server: str
     proc: subprocess.Popen
     port: int
+    mt5_path: str  # セッション固有のMT5パス
     created_at: datetime
     last_accessed: datetime
 
@@ -38,8 +40,23 @@ class SessionManager:
         # 基本ディレクトリがなければ作成
         os.makedirs(base_path, exist_ok=True)
         
+        # MT5ポータブル版のパスが存在するか確認
+        if not os.path.exists(portable_mt5_path):
+            logger.error(f"MT5ポータブル版が見つかりません: {portable_mt5_path}")
+        else:
+            logger.info(f"MT5ポータブル版が見つかりました: {portable_mt5_path}")
+        
+        # MT5のインストールディレクトリを取得
+        self.mt5_install_dir = os.path.dirname(self.portable_mt5_path)
+        if not os.path.exists(self.mt5_install_dir):
+            logger.error(f"MT5インストールディレクトリが見つかりません: {self.mt5_install_dir}")
+        else:
+            logger.info(f"MT5インストールディレクトリが見つかりました: {self.mt5_install_dir}")
+            # ディレクトリ内のファイル一覧を表示
+            files = os.listdir(self.mt5_install_dir)
+            logger.info(f"MT5インストールディレクトリのファイル一覧: {files}")
+        
         logger.info(f"SessionManager initialized: base_path={base_path}, mt5_path={portable_mt5_path}")
-        logger.info(f"MT5パスが存在するか: {os.path.exists(portable_mt5_path)}")
     
     def create_session(self, login: int, password: str, server: str) -> str:
         """
@@ -64,35 +81,72 @@ class SessionManager:
         port = self._next_port
         self._next_port += 1
         
-        # MT5インストールディレクトリのパス
-        mt5_install_dir = os.path.dirname(self.portable_mt5_path)
-        
         logger.info(f"新規セッション作成: id={sid}, login={login}, server={server}, port={port}")
-        logger.info(f"MT5インストールディレクトリ: {mt5_install_dir}")
+        logger.info(f"MT5インストールディレクトリ: {self.mt5_install_dir}")
         logger.info(f"セッションディレクトリ: {session_dir}")
         
         try:
-            # 方法1: /portable オプションを使用
+            # MT5ポータブル版のファイルをセッションディレクトリにコピー
+            logger.info("MT5ファイルをセッションディレクトリにコピー中...")
+            
+            # 必要なファイルとディレクトリだけをコピー
+            required_items = [
+                "terminal64.exe",
+                "Config",
+                "MQL5",
+                "Sounds",
+                "symbols.dat",
+                "startup.dat",
+                "MetaQuotes.dat",
+                "history",
+                "logs",
+                "*.dll"
+            ]
+            
+            # 必要なファイル・ディレクトリをコピー
+            for pattern in required_items:
+                items = glob.glob(os.path.join(self.mt5_install_dir, pattern))
+                for item_path in items:
+                    item_name = os.path.basename(item_path)
+                    target_path = os.path.join(session_dir, item_name)
+                    
+                    if os.path.isfile(item_path):
+                        logger.info(f"ファイルコピー: {item_path} -> {target_path}")
+                        shutil.copy2(item_path, target_path)
+                    elif os.path.isdir(item_path):
+                        logger.info(f"ディレクトリコピー: {item_path} -> {target_path}")
+                        if os.path.exists(target_path):
+                            shutil.rmtree(target_path)
+                        shutil.copytree(item_path, target_path)
+            
+            # セッション固有のMT5実行ファイルパス
+            mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
+            
+            if not os.path.exists(mt5_exec_path):
+                raise FileNotFoundError(f"MT5実行ファイルが見つかりません: {mt5_exec_path}")
+            
+            logger.info(f"MT5実行ファイルが存在します: {mt5_exec_path}")
+            
             # MT5プロセスを起動 (ポータブルモードとポート指定)
-            cmd = [self.portable_mt5_path, f"/portable:{session_dir}", f"/port:{port}"]
+            cmd = [mt5_exec_path, f"/portable", f"/port:{port}"]
             logger.info(f"実行コマンド: {' '.join(cmd)}")
             
             proc = subprocess.Popen(
                 cmd,
-                cwd=mt5_install_dir,
+                cwd=session_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE
             )
             
             logger.info(f"MT5プロセス起動: PID={proc.pid}")
             
-            # プロセスが起動するまで待機 (15秒に延長)
+            # プロセスが起動するまで待機 (20秒に延長)
             logger.info("MT5プロセス起動待機中...")
-            time.sleep(15)
+            time.sleep(20)
             
             # MT5に接続
             logger.info("MT5初期化開始...")
-            if not mt5.initialize(path=self.portable_mt5_path, login=login, password=password, server=server):
+            if not mt5.initialize(path=mt5_exec_path, login=login, password=password, server=server):
                 # エラーがあればプロセスを終了し、ディレクトリを削除
                 error = mt5.last_error()
                 logger.error(f"MT5初期化エラー: {error}")
@@ -120,6 +174,7 @@ class SessionManager:
                 server=server,
                 proc=proc,
                 port=port,
+                mt5_path=mt5_exec_path,
                 created_at=now,
                 last_accessed=now
             )
@@ -222,6 +277,7 @@ class SessionManager:
                 "login": s.login,
                 "server": s.server,
                 "port": s.port,
+                "mt5_path": s.mt5_path,
                 "created_at": s.created_at.isoformat(),
                 "last_accessed": s.last_accessed.isoformat(),
                 "age_seconds": (datetime.now() - s.created_at).total_seconds()
