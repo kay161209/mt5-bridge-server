@@ -47,10 +47,16 @@ except ImportError as e:
 
 # MT5の設定値
 MT5_PORTABLE_PATH = os.getenv("MT5_PORTABLE_PATH", r"C:\MetaTrader5-Portable\terminal64.exe")
-SESSIONS_BASE_PATH = os.getenv("SESSIONS_BASE_PATH", r"C:\mt5-sessions-test")
+SESSIONS_BASE_PATH = os.getenv("TEST_SESSIONS_BASE_PATH", r"C:\mt5-sessions-test")
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.getenv("MT5_PASSWORD", "")
 MT5_SERVER = os.getenv("MT5_SERVER", "")
+
+logger.info("使用する環境変数:")
+logger.info(f"MT5_PORTABLE_PATH: {MT5_PORTABLE_PATH}")
+logger.info(f"SESSIONS_BASE_PATH: {SESSIONS_BASE_PATH}")
+logger.info(f"MT5_LOGIN: {MT5_LOGIN}")
+logger.info(f"MT5_SERVER: {MT5_SERVER}")
 
 # MT5プロセスを直接起動するためのオーバーライドメソッド
 def custom_run_mt5_process(mt5_exec_path, session_dir, port):
@@ -58,7 +64,7 @@ def custom_run_mt5_process(mt5_exec_path, session_dir, port):
     logger.info("カスタムMT5プロセス起動を使用")
     
     # バックグラウンドでMT5を起動するコマンド
-    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate", "/config:config.ini"]
+    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate"]
     logger.info(f"実行コマンド: {' '.join(cmd)}")
     
     try:
@@ -66,6 +72,27 @@ def custom_run_mt5_process(mt5_exec_path, session_dir, port):
         creation_flags = 0
         if os.name == 'nt':
             creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        
+        # セッションディレクトリにconfig.iniが存在するか確認
+        config_path = os.path.join(session_dir, "Config", "config.ini")
+        if not os.path.exists(config_path):
+            logger.info(f"config.iniが見つかりません: {config_path}")
+            
+            # Config ディレクトリを確認
+            config_dir = os.path.join(session_dir, "Config")
+            if not os.path.exists(config_dir):
+                os.makedirs(config_dir, exist_ok=True)
+                logger.info(f"Configディレクトリを作成しました: {config_dir}")
+            
+            # 基本的なconfig.iniを作成
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write("[Common]\n")
+                f.write("Login=0\n")
+                f.write("ProxyEnable=0\n")
+                f.write("NewsEnable=0\n")
+                f.write("AutoUpdate=0\n")
+                f.write("StartupMode=2\n")  # サイレントモード
+            logger.info(f"基本的なconfig.iniファイルを作成しました: {config_path}")
         
         proc = subprocess.Popen(
             cmd,
