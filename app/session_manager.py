@@ -21,7 +21,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('mt5_session.log')  # ファイルにもログを出力
+        logging.FileHandler('mt5_session.log', encoding='utf-8')  # ファイルにもログを出力
     ]
 )
 logger = logging.getLogger("session_manager")
