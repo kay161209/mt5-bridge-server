@@ -37,6 +37,9 @@ class SessionManager:
         self.portable_mt5_path = portable_mt5_path
         self._next_port = 8000
         
+        # テンプレートディレクトリ - MT5の最小構成をあらかじめコピーしておく場所
+        self.template_dir = os.path.join(base_path, "_template")
+        
         # 基本ディレクトリがなければ作成
         os.makedirs(base_path, exist_ok=True)
         
@@ -56,7 +59,48 @@ class SessionManager:
             files = os.listdir(self.mt5_install_dir)
             logger.info(f"MT5インストールディレクトリのファイル一覧: {files}")
         
+        # テンプレートディレクトリが存在しなければ作成
+        self._prepare_template_directory()
+        
         logger.info(f"SessionManager initialized: base_path={base_path}, mt5_path={portable_mt5_path}")
+    
+    def _prepare_template_directory(self):
+        """MT5の最小テンプレートディレクトリを準備"""
+        if os.path.exists(self.template_dir) and os.path.isfile(os.path.join(self.template_dir, "terminal64.exe")):
+            logger.info(f"テンプレートディレクトリが既に存在します: {self.template_dir}")
+            return
+        
+        logger.info(f"テンプレートディレクトリを作成します: {self.template_dir}")
+        os.makedirs(self.template_dir, exist_ok=True)
+        
+        # 最小限必要なファイルとディレクトリだけをコピー
+        # MT5の最小構成
+        required_items = [
+            "terminal64.exe",
+            "*.dll",
+            "Config",
+            "MQL5/Libraries"
+        ]
+        
+        for pattern in required_items:
+            items = glob.glob(os.path.join(self.mt5_install_dir, pattern))
+            for item_path in items:
+                item_name = os.path.basename(item_path)
+                target_path = os.path.join(self.template_dir, item_name)
+                
+                if os.path.isfile(item_path):
+                    logger.info(f"テンプレートにファイルコピー: {item_path} -> {target_path}")
+                    shutil.copy2(item_path, target_path)
+                elif os.path.isdir(item_path):
+                    logger.info(f"テンプレートにディレクトリコピー: {item_path} -> {target_path}")
+                    if os.path.exists(target_path):
+                        shutil.rmtree(target_path)
+                    shutil.copytree(item_path, target_path, symlinks=True)
+        
+        # 空のディレクトリ構造を作成
+        empty_dirs = ["MQL5/Experts", "MQL5/Scripts", "MQL5/Indicators", "logs", "files", "tester"]
+        for dir_path in empty_dirs:
+            os.makedirs(os.path.join(self.template_dir, dir_path), exist_ok=True)
     
     def create_session(self, login: int, password: str, server: str) -> str:
         """
@@ -86,38 +130,25 @@ class SessionManager:
         logger.info(f"セッションディレクトリ: {session_dir}")
         
         try:
-            # MT5ポータブル版のファイルをセッションディレクトリにコピー
-            logger.info("MT5ファイルをセッションディレクトリにコピー中...")
+            # テンプレートディレクトリからファイルをコピー (高速)
+            start_time = time.time()
+            logger.info("テンプレートからMT5ファイルをセッションディレクトリにコピー中...")
             
-            # 必要なファイルとディレクトリだけをコピー
-            required_items = [
-                "terminal64.exe",
-                "Config",
-                "MQL5",
-                "Sounds",
-                "symbols.dat",
-                "startup.dat",
-                "MetaQuotes.dat",
-                "history",
-                "logs",
-                "*.dll"
-            ]
+            for item in os.listdir(self.template_dir):
+                src_path = os.path.join(self.template_dir, item)
+                dst_path = os.path.join(session_dir, item)
+                
+                if os.path.isfile(src_path):
+                    shutil.copy2(src_path, dst_path)
+                elif os.path.isdir(src_path):
+                    shutil.copytree(src_path, dst_path, symlinks=True)
             
-            # 必要なファイル・ディレクトリをコピー
-            for pattern in required_items:
-                items = glob.glob(os.path.join(self.mt5_install_dir, pattern))
-                for item_path in items:
-                    item_name = os.path.basename(item_path)
-                    target_path = os.path.join(session_dir, item_name)
-                    
-                    if os.path.isfile(item_path):
-                        logger.info(f"ファイルコピー: {item_path} -> {target_path}")
-                        shutil.copy2(item_path, target_path)
-                    elif os.path.isdir(item_path):
-                        logger.info(f"ディレクトリコピー: {item_path} -> {target_path}")
-                        if os.path.exists(target_path):
-                            shutil.rmtree(target_path)
-                        shutil.copytree(item_path, target_path)
+            # 必要なプロファイルファイル作成
+            with open(os.path.join(session_dir, "portable_mode"), "w") as f:
+                f.write("portable")
+            
+            copy_time = time.time() - start_time
+            logger.info(f"MT5ファイルのコピーが完了しました (所要時間: {copy_time:.2f}秒)")
             
             # セッション固有のMT5実行ファイルパス
             mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
@@ -127,8 +158,8 @@ class SessionManager:
             
             logger.info(f"MT5実行ファイルが存在します: {mt5_exec_path}")
             
-            # MT5プロセスを起動 (ポータブルモードとポート指定)
-            cmd = [mt5_exec_path, f"/portable", f"/port:{port}"]
+            # MT5プロセスを起動 (ポート指定)
+            cmd = [mt5_exec_path, f"/port:{port}"]
             logger.info(f"実行コマンド: {' '.join(cmd)}")
             
             proc = subprocess.Popen(
