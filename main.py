@@ -6,7 +6,7 @@ import io
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from app.routes import router as api_router
 from app.config import settings
-from app.session_manager import init_session_manager, get_session_manager
+from app.session_manager import init_session_manager, get_session_manager, cleanup_resources
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import codecs
@@ -14,6 +14,48 @@ import json
 import time
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
+import signal
+import atexit
+
+# キーボード割り込みとシグナル処理
+def signal_handler(sig, frame):
+    """シグナル処理"""
+    logger.info(f"シグナル {sig} を受信しました。クリーンアップを実行します...")
+    cleanup_resources()
+    sys.exit(0)
+
+# SIGINTシグナル（Ctrl+C）の処理
+signal.signal(signal.SIGINT, signal_handler)
+if hasattr(signal, 'SIGBREAK'):  # Windowsの場合
+    signal.signal(signal.SIGBREAK, signal_handler)
+
+# 安全なストリームラッパー
+def safe_wrap_stream(stream, encoding='utf-8'):
+    if stream is None:
+        return None
+    try:
+        if hasattr(stream, 'buffer'):
+            return io.TextIOWrapper(stream.buffer, encoding=encoding, errors='replace')
+        return stream
+    except (ValueError, AttributeError):
+        return stream
+
+# プログラム終了時に標準ストリームを復元
+def reset_streams():
+    try:
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+    except:
+        pass
+
+# 標準出力と標準エラー出力を安全にラップ
+original_stdout = sys.stdout
+original_stderr = sys.stderr
+sys.stdout = safe_wrap_stream(sys.stdout)
+sys.stderr = safe_wrap_stream(sys.stderr)
+
+# プログラム終了時に実行
+atexit.register(reset_streams)
 
 # Configure logging first
 os.makedirs('logs', exist_ok=True)
@@ -23,31 +65,45 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Configure console handler with UTF-8 encoding
-console_handler = logging.StreamHandler(
-    stream=io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(console_handler)
+try:
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(console_handler)
+except (ValueError, AttributeError):
+    pass
 
 # Configure file handler with UTF-8 encoding
-file_handler = logging.handlers.RotatingFileHandler(
-    log_file, maxBytes=10485760, backupCount=5, encoding='utf-8'
-)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logger.addHandler(file_handler)
+try:
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=10485760, backupCount=5, encoding='utf-8'
+    )
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+except (ValueError, AttributeError, PermissionError) as e:
+    print(f"ファイルログハンドラの設定エラー: {e}")
 
-# Ensure sys.stdout and sys.stderr use UTF-8
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# メインアプリケーションのクリーンアップ関数
+def cleanup_app_resources():
+    """アプリケーション終了時のクリーンアップ"""
+    try:
+        logger.info("アプリケーションリソースをクリーンアップしています...")
+        # ロガーハンドラのクリーンアップ
+        for handler in logger.handlers[:]:
+            try:
+                handler.close()
+                logger.removeHandler(handler)
+            except:
+                pass
+    except:
+        pass
 
-# Set default encoding for Python
-if hasattr(sys, 'setdefaultencoding'):
-    sys.setdefaultencoding('utf-8')
+# 終了時にクリーンアップを実行
+atexit.register(cleanup_app_resources)
 
 # Verify encoding settings
 logger.info(f"システムのデフォルトエンコーディング: {sys.getdefaultencoding()}")
 logger.info(f"ファイルシステムエンコーディング: {sys.getfilesystemencoding()}")
-logger.info(f"標準出力エンコーディング: {sys.stdout.encoding}")
+logger.info(f"標準出力エンコーディング: {sys.stdout.encoding if hasattr(sys.stdout, 'encoding') else 'unknown'}")
 
 app = FastAPI(
     title="MT5 Bridge API",

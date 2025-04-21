@@ -14,28 +14,101 @@ import sys
 import traceback
 import json
 import platform
+import atexit
 
-# Enhanced logger configuration
-logger = logging.getLogger("session_manager")
-logger.setLevel(logging.DEBUG)
+# 安全なストリームラッパー
+def safe_wrap_stream(stream, encoding='utf-8'):
+    """標準ストリームを安全にラップする"""
+    if stream is None:
+        return None
+        
+    try:
+        # すでにラップされていないか確認
+        if hasattr(stream, 'buffer'):
+            return io.TextIOWrapper(stream.buffer, encoding=encoding, errors='replace')
+        return stream
+    except (ValueError, AttributeError):
+        return stream
 
-# ファイルハンドラがまだ追加されていない場合のみ追加
-if not logger.handlers:
-    file_handler = logging.FileHandler('mt5_session.log', encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+# プログラム終了時にIOエラーを防止するため標準ストリームを復元
+def reset_streams():
+    """プログラム終了時に標準ストリームを復元"""
+    try:
+        # 標準出力と標準エラー出力を元に戻す
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+    except:
+        pass
 
-# 標準出力ハンドラの追加（コンソール出力をUTF-8に設定）
-console_handler = logging.StreamHandler(
-    stream=io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-)
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+# ロガー設定を改善
+def configure_logger(name="session_manager", level=logging.DEBUG):
+    """より堅牢なロガー設定"""
+    lgr = logging.getLogger(name)
+    lgr.setLevel(level)
+    
+    # ハンドラがない場合のみ追加
+    if not lgr.handlers:
+        try:
+            # ファイルハンドラ
+            os.makedirs('logs', exist_ok=True)
+            file_handler = logging.FileHandler(
+                os.path.join('logs', f'{name}.log'), 
+                encoding='utf-8', 
+                mode='a'
+            )
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(formatter)
+            lgr.addHandler(file_handler)
+            
+            # コンソールハンドラ - エラー処理強化
+            try:
+                # 通常はstdout.bufferを使用するが、閉じられている場合はシンプルなハンドラを使用
+                console_handler = logging.StreamHandler()
+                console_handler.setFormatter(formatter)
+                lgr.addHandler(console_handler)
+            except (ValueError, AttributeError):
+                pass
+        except Exception as e:
+            # ロガー設定時のエラーを処理
+            print(f"Logger configuration error: {e}")
+    
+    return lgr
 
-# システムのエンコーディングを確保
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# プロセス終了時のクリーンアップ関数
+def cleanup_resources():
+    """プログラム終了時にリソースをクリーンアップする"""
+    try:
+        # MT5接続をシャットダウン
+        mt5.shutdown()
+    except:
+        pass
+    
+    # ロガーハンドラをクリーンアップ
+    try:
+        for handler in logger.handlers[:]:
+            try:
+                handler.close()
+                logger.removeHandler(handler)
+            except:
+                pass
+    except:
+        pass
+    
+    # 標準ストリームを復元
+    reset_streams()
+
+# 標準出力と標準エラー出力を安全にラップ
+original_stdout = sys.stdout
+original_stderr = sys.stderr
+sys.stdout = safe_wrap_stream(sys.stdout)
+sys.stderr = safe_wrap_stream(sys.stderr)
+
+# プログラム終了時に実行
+atexit.register(reset_streams)
+atexit.register(cleanup_resources)
+
+# ロガーの設定を安全に行う
+logger = configure_logger("session_manager")
 
 class Session(NamedTuple):
     id: str
@@ -224,7 +297,7 @@ AutoUpdate=0
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP  # Windowsでのプロセスグループ分離
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0  # Windowsでのプロセスグループ分離
             )
             
             logger.info(f"MT5プロセスが起動しました: PID={proc.pid}")
@@ -240,7 +313,7 @@ AutoUpdate=0
                 
                 # Read standard output and error (non-blocking)
                 if proc.stdout:
-                    while True:
+                    for _ in range(10):  # 最大10行まで読み込む（無限ループ防止）
                         line = proc.stdout.readline()
                         if not line:
                             break
@@ -248,26 +321,26 @@ AutoUpdate=0
                         logger.debug(f"MT5 STDOUT: {line.strip()}")
                 
                 if proc.stderr:
-                    while True:
+                    for _ in range(10):  # 最大10行まで読み込む（無限ループ防止）
                         line = proc.stderr.readline()
                         if not line:
                             break
                         stderr_data += line
                         logger.debug(f"MT5 STDERR: {line.strip()}")
             except Exception as e:
-                logger.warning(f"Error while reading process output: {e}")
+                logger.warning(f"プロセス出力読み取り中にエラーが発生しました: {e}")
             
             # Check process status
             returncode = proc.poll()
             if returncode is not None:
-                logger.error(f"MT5 process terminated unexpectedly. Return code: {returncode}")
+                logger.error(f"MT5プロセスが予期せず終了しました。リターンコード: {returncode}")
                 output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
-                logger.error(f"MT5 process output:\n{output}")
-                raise RuntimeError(f"MT5 process failed to start. Return code: {returncode}")
+                logger.error(f"MT5プロセス出力:\n{output}")
+                raise RuntimeError(f"MT5プロセスの起動に失敗しました。リターンコード: {returncode}")
             
             return proc, {"stdout": stdout_data, "stderr": stderr_data}
         except Exception as e:
-            logger.exception(f"Error occurred during MT5 process start: {e}")
+            logger.exception(f"MT5プロセス起動中にエラーが発生しました: {e}")
             raise
     
     def _initialize_mt5(self, mt5_exec_path: str, login: int, password: str, server: str) -> Dict[str, Any]:
@@ -349,29 +422,30 @@ AutoUpdate=0
         """
         # Generate session ID
         sid = uuid.uuid4().hex
-        
-        # Create directory for the session
-        session_dir = os.path.join(self.base_path, sid)
-        if os.path.exists(session_dir):
-            shutil.rmtree(session_dir)
-        os.makedirs(session_dir, exist_ok=True)
-        
-        # Assign a port for this session
-        port = self._next_port
-        self._next_port += 1
-        
-        logger.info(f"Creating new session: id={sid}, login={login}, server={server}, port={port}")
-        logger.info(f"Session directory: {session_dir}")
+        proc = None  # 後のクリーンアップのために変数を初期化
         
         try:
+            # Create directory for the session
+            session_dir = os.path.join(self.base_path, sid)
+            if os.path.exists(session_dir):
+                shutil.rmtree(session_dir)
+            os.makedirs(session_dir, exist_ok=True)
+            
+            # Assign a port for this session
+            port = self._next_port
+            self._next_port += 1
+            
+            logger.info(f"新しいセッションを作成します: id={sid}, login={login}, server={server}, port={port}")
+            logger.info(f"セッションディレクトリ: {session_dir}")
+            
             # Check if template directory exists
             if not os.path.exists(self.template_dir) or not os.path.isfile(os.path.join(self.template_dir, "terminal64.exe")):
-                logger.warning("Template directory not found or incomplete. Recreating.")
+                logger.warning("テンプレートディレクトリが見つからないか不完全です。再作成します。")
                 self._prepare_template_directory()
             
             # Copy files from template directory (fast)
             start_time = time.time()
-            logger.info("Copying MT5 files from template to session directory...")
+            logger.info("MT5ファイルをテンプレートからセッションディレクトリにコピーしています...")
             
             for item in os.listdir(self.template_dir):
                 src_path = os.path.join(self.template_dir, item)
@@ -393,31 +467,40 @@ Login={login}
 Password={password}
 ProxyEnable=0
 """
-            with open(os.path.join(config_dir, "login.ini"), "w") as f:
+            with open(os.path.join(config_dir, "login.ini"), "w", encoding='utf-8') as f:
                 f.write(login_ini_content)
             
             copy_time = time.time() - start_time
-            logger.info(f"MT5 file copying completed (time taken: {copy_time:.2f} seconds)")
+            logger.info(f"MT5ファイルのコピーが完了しました (所要時間: {copy_time:.2f} 秒)")
             
             # Session-specific MT5 executable path
             mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
             
             if not os.path.exists(mt5_exec_path):
-                raise FileNotFoundError(f"MT5 executable not found: {mt5_exec_path}")
+                raise FileNotFoundError(f"MT5実行ファイルが見つかりません: {mt5_exec_path}")
             
-            logger.info(f"MT5 executable exists: {mt5_exec_path}")
+            logger.info(f"MT5実行ファイルが存在します: {mt5_exec_path}")
             
+            # 既存のMT5プロセスをシャットダウン
+            try:
+                mt5.shutdown()
+                logger.info("既存のMT5接続をシャットダウンしました")
+                time.sleep(2)  # シャットダウン完了を待機
+            except:
+                pass
+                
             # Start MT5 process and get output
             proc, process_output = self._run_mt5_process(mt5_exec_path, session_dir, port)
             
             # Wait for process to start up
-            logger.info("Waiting for MT5 process to start... (60 seconds)")
+            logger.info("MT5プロセスの起動を待機しています... (60秒)")
             time.sleep(60)  # 30秒から60秒に延長
             
             # プロセスの状態を確認
             if proc.poll() is not None:
-                logger.error("MT5プロセスが予期せず終了しました")
-                # エラー処理
+                error_msg = f"MT5プロセスが予期せず終了しました。リターンコード: {proc.poll()}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
             
             # Connect to MT5
             init_result = self._initialize_mt5(mt5_exec_path, login, password, server)
@@ -438,13 +521,14 @@ ProxyEnable=0
                     "elapsed_time": init_result["elapsed_time"]
                 }
                 
-                logger.error(f"MT5 initialization error details: {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
+                logger.error(f"MT5初期化エラーの詳細: {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
                 
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                if proc.poll() is None:  # プロセスがまだ実行中の場合
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
                 
                 try:
                     # Save error information
@@ -453,14 +537,14 @@ ProxyEnable=0
                     
                     # Don't delete the directory, keep it for error diagnosis
                     # shutil.rmtree(session_dir)
-                    logger.info(f"Keeping session directory for error diagnosis: {session_dir}")
+                    logger.info(f"エラー診断のためにセッションディレクトリを保持します: {session_dir}")
                 except Exception as e:
-                    logger.error(f"Exception occurred while saving error log: {e}")
+                    logger.error(f"エラーログの保存中に例外が発生しました: {e}")
                     
                 detailed_error = get_detailed_error(error_code, error_message)
-                raise RuntimeError(f"MT5 initialization error: {error_code} - {error_message}\n{detailed_error}")
+                raise RuntimeError(f"MT5初期化エラー: {error_code} - {error_message}\n{detailed_error}")
             
-            logger.info("MT5 initialization successful")
+            logger.info("MT5初期化が成功しました")
             
             # Save session information
             now = datetime.now()
@@ -479,15 +563,15 @@ ProxyEnable=0
             return sid
             
         except Exception as e:
-            logger.exception(f"Exception occurred during session creation: {e}")
+            logger.exception(f"セッション作成中に例外が発生しました: {e}")
             
             # Log stack trace
             trace = traceback.format_exc()
-            logger.error(f"Stack trace: {trace}")
+            logger.error(f"スタックトレース: {trace}")
             
             # Cleanup
             try:
-                if 'proc' in locals() and proc:
+                if proc is not None and proc.poll() is None:  # プロセスがまだ実行中の場合
                     proc.terminate()
                     try:
                         proc.wait(timeout=5)
@@ -540,31 +624,34 @@ ProxyEnable=0
         session = self._sessions.pop(sid)
         logger.info(f"Ending session: {sid}")
         
-        # Shut down MT5 connection
+        # MT5接続をシャットダウン - エラー処理強化
         try:
             mt5.shutdown()
             logger.info("MT5 shutdown complete")
         except Exception as e:
             logger.error(f"MT5 shutdown error: {e}")
         
-        # Terminate process
-        try:
-            logger.info(f"Terminating process: PID={session.proc.pid}")
-            session.proc.terminate()
+        # プロセス終了処理を強化
+        if session.proc:
             try:
-                session.proc.wait(timeout=5)
-                logger.info("Process terminated normally")
-            except subprocess.TimeoutExpired:
-                logger.warning("Forcing process termination")
-                session.proc.kill()
-        except Exception as e:
-            logger.error(f"Process termination error: {e}")
+                if session.proc.poll() is None:  # まだ実行中の場合のみ
+                    logger.info(f"Terminating process: PID={session.proc.pid}")
+                    session.proc.terminate()
+                    try:
+                        session.proc.wait(timeout=5)
+                        logger.info("Process terminated normally")
+                    except subprocess.TimeoutExpired:
+                        logger.warning("Forcing process termination")
+                        session.proc.kill()
+            except Exception as e:
+                logger.error(f"Process termination error: {e}")
         
-        # Delete session directory
+        # セッションディレクトリの削除
         try:
             session_dir = os.path.join(self.base_path, sid)
-            logger.info(f"Deleting session directory: {session_dir}")
-            shutil.rmtree(session_dir)
+            if os.path.exists(session_dir):
+                logger.info(f"Deleting session directory: {session_dir}")
+                shutil.rmtree(session_dir)
         except Exception as e:
             logger.error(f"Directory deletion error: {e}")
         
