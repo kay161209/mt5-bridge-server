@@ -284,11 +284,12 @@ AutoUpdate=0
     def _run_mt5_process(self, mt5_exec_path: str, session_dir: str, port: int) -> Tuple[subprocess.Popen, Any]:
         """Start MT5 process and record output"""
         # MT5プロセスの起動（ポート指定あり）
-        cmd = [mt5_exec_path, f"/port:{port}"]
+        cmd = [mt5_exec_path, f"/port:{port}", "/portable"]
         logger.info(f"実行コマンド: {' '.join(cmd)}")
         
         try:
             # プロセス起動時のエラー処理を強化
+            # DETACHED_PROCESSフラグを追加してコンソールウィンドウなしで実行
             proc = subprocess.Popen(
                 cmd,
                 cwd=session_dir,
@@ -297,7 +298,7 @@ AutoUpdate=0
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0  # Windowsでのプロセスグループ分離
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
             )
             
             logger.info(f"MT5プロセスが起動しました: PID={proc.pid}")
@@ -366,12 +367,14 @@ AutoUpdate=0
         error_message = None
         
         try:
+            # ポータブルモードを明示的に指定
             success = mt5.initialize(
                 path=mt5_exec_path,
                 login=login,
                 password=password,
                 server=server,
-                timeout=120000  # 60秒から120秒に延長
+                timeout=180000,  # 3分に延長
+                portable=True    # ポータブルモードを明示的に指定
             )
             
             if not success:

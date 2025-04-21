@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
 import signal
 import atexit
+import traceback
 
 # キーボード割り込みとシグナル処理
 def signal_handler(sig, frame):
@@ -131,24 +132,41 @@ def check_token(x_api_token: str | None):
 
 @app.on_event("startup")
 async def _startup():
-    logger.info("Server starting up...")
-    
-    # Initialize session manager
-    logger.info(f"Initializing session manager: {settings.sessions_base_path}, {settings.mt5_portable_path}")
-    init_session_manager(settings.sessions_base_path, settings.mt5_portable_path)
-    
-    # Set up periodic session cleanup
-    logger.info(f"Setting up cleanup scheduler: {settings.cleanup_interval} seconds interval")
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        cleanup_old_sessions,
-        'interval', 
-        seconds=settings.cleanup_interval,
-        id='session_cleanup'
-    )
-    scheduler.start()
-    
-    logger.info("Server startup complete")
+    try:
+        logger.info("Server starting up...")
+        
+        # Initialize session manager
+        try:
+            logger.info(f"Initializing session manager: {settings.sessions_base_path}, {settings.mt5_portable_path}")
+            init_session_manager(settings.sessions_base_path, settings.mt5_portable_path)
+            logger.info("Session manager initialized successfully")
+        except Exception as e:
+            logger.exception(f"Error initializing session manager: {e}")
+            raise RuntimeError(f"Failed to initialize session manager: {e}")
+        
+        # Set up periodic session cleanup
+        try:
+            logger.info(f"Setting up cleanup scheduler: {settings.cleanup_interval} seconds interval")
+            scheduler = AsyncIOScheduler()
+            scheduler.add_job(
+                cleanup_old_sessions,
+                'interval', 
+                seconds=settings.cleanup_interval,
+                id='session_cleanup'
+            )
+            scheduler.start()
+            logger.info("Cleanup scheduler started successfully")
+        except Exception as e:
+            logger.exception(f"Error setting up cleanup scheduler: {e}")
+            logger.warning("Continuing without cleanup scheduler")
+            # Continue without scheduler rather than failing startup
+        
+        logger.info("Server startup complete")
+    except Exception as e:
+        logger.critical(f"Fatal error during startup: {e}")
+        logger.critical(f"Stack trace: {traceback.format_exc()}")
+        # Re-raise to fail startup
+        raise
 
 @app.on_event("shutdown")
 async def _shutdown():
