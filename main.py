@@ -144,11 +144,14 @@ async def startup_event():
         
         # セッションマネージャー初期化
         try:
-            # SessionManagerに必要な引数を設定から取得
-            app.state.session_manager = SessionManager(
+            # グローバル変数にも設定できるようにinit_session_managerを使用
+            init_session_manager(
                 base_path=settings.sessions_base_path, 
                 portable_mt5_path=settings.mt5_portable_path
             )
+            
+            # app.stateにもセッションマネージャーを設定
+            app.state.session_manager = get_session_manager()
             logger.info("セッションマネージャーを初期化しました")
         except Exception as e:
             logger.error(f"セッションマネージャーの初期化に失敗しました: {e}", exc_info=True)
