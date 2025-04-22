@@ -38,37 +38,43 @@ def check_env_var(env_var, default=None, var_type=str):
 
 class Settings(BaseSettings):
     # API認証設定
-    bridge_token: str = check_env_var("BRIDGE_TOKEN", "default_token")
+    bridge_token: str = "default_token"
     
     # MT5設定
-    mt5_path: str = check_env_var("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
-    mt5_login: int = check_env_var("MT5_LOGIN", 0, int)
-    mt5_password: str = check_env_var("MT5_PASSWORD", "")
-    mt5_server: str = check_env_var("MT5_SERVER", "")
-    mt5_portable_path: str = check_env_var("MT5_PORTABLE_PATH", r"C:\MT5_portable\terminal64.exe")
+    mt5_path: str = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+    mt5_login: int = 0
+    mt5_password: str = ""
+    mt5_server: str = ""
+    mt5_portable_path: str = r"C:\MT5_portable\terminal64.exe"
     
     # WebSocket設定
-    ws_broadcast_interval: int = check_env_var("WS_BROADCAST_INTERVAL", 1, int)
+    ws_broadcast_interval: float = 1.0
     
     # セッション管理設定
-    sessions_base_path: str = check_env_var("SESSIONS_BASE_PATH", r"C:\mt5-sessions")
-    # テスト用セッションパス - コンフィグで使用する場合はここで定義
-    # test_sessions_base_path: str = check_env_var("TEST_SESSIONS_BASE_PATH", r"C:\mt5-test-sessions")
+    sessions_base_path: str = r"C:\mt5-sessions"
     
     # セッションタイムアウト設定
-    session_inactive_timeout: int = check_env_var("SESSION_INACTIVE_TIMEOUT", 3600, int)
-    cleanup_interval: int = check_env_var("CLEANUP_INTERVAL", 60, int)
-    max_session_age_hours: int = check_env_var("MAX_SESSION_AGE_HOURS", 24, int)
-    session_cleanup_interval_minutes: int = check_env_var("SESSION_CLEANUP_INTERVAL_MINUTES", 30, int)
+    session_inactive_timeout: int = 3600
+    cleanup_interval: int = 60
+    max_session_age_hours: int = 24
+    session_cleanup_interval_minutes: int = 30
     
     # ログレベル設定
-    log_level: str = check_env_var("LOG_LEVEL", "INFO")
+    log_level: str = "INFO"
 
     class Config:
-        # 追加フィールドを許可しない設定に変更
-        extra = "forbid"
         env_file = ".env"
-        case_sensitive = True
+        case_sensitive = False
+        env_prefix = ""
+        extra = "ignore"  # 追加のフィールドを許可する設定に変更
 
 # 設定のグローバルインスタンス
 settings = Settings()
+
+# 設定値のログ出力（デバッグ用）
+logger.debug(f"設定を読み込みました:")
+logger.debug(f"  - bridge_token: {settings.bridge_token}")
+logger.debug(f"  - mt5_path: {settings.mt5_path}")
+logger.debug(f"  - mt5_portable_path: {settings.mt5_portable_path}")
+logger.debug(f"  - sessions_base_path: {settings.sessions_base_path}")
+logger.debug(f"  - log_level: {settings.log_level}")
