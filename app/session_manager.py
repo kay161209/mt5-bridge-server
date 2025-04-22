@@ -5,7 +5,7 @@ import os
 import shutil
 from typing import NamedTuple, Dict, Optional, Any, Tuple
 import MetaTrader5 as mt5
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import glob
 import zipfile
@@ -15,6 +15,9 @@ import traceback
 import json
 import platform
 import atexit
+import psutil
+from pathlib import Path
+import select
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
@@ -120,42 +123,250 @@ class Session(NamedTuple):
     created_at: datetime
     last_accessed: datetime
 
-# Detailed MT5 API error messages and codes
+# MT5 APIエラーコードとメッセージの対応
 MT5_ERROR_CODES = {
-    -10005: "IPC Timeout - Process communication timed out. Failed to establish connection with MT5.",
-    -10004: "IPC Initialization Error - Failed to initialize inter-process communication.",
-    -10003: "IPC Test Socket Creation Error - Failed to create a test socket.",
-    -10002: "IPC Data Socket Creation Error - Failed to create a data communication socket.",
-    -10001: "IPC Event Socket Creation Error - Failed to create an event notification socket.",
-    -10000: "IPC Error - General error in inter-process communication.",
-    -9999: "Startup Path Not Found - MetaTrader 5 execution path was not found.",
-    -8: "Insufficient Buffer - Buffer for receiving data is insufficient.",
-    -7: "Structure Too Small - Data structure size is insufficient.",
-    -6: "No Data - Requested data is not available.",
-    -5: "Internal Error - Internal error in MetaTrader 5 terminal.",
-    -4: "Insufficient Memory - Insufficient memory to execute the function.",
-    -3: "Invalid Parameter - Invalid parameter was passed to the function.",
-    -2: "Communication with terminal not established.",
-    -1: "Unknown Error - Cause unknown.",
-    0: "No Error - Operation completed successfully.",
+    -10005: "IPC Timeout - プロセス間通信がタイムアウトしました。MT5との接続確立に失敗しました。",
+    -10004: "IPC Initialization Error - プロセス間通信の初期化に失敗しました。",
+    -10003: "IPC Test Socket Creation Error - テストソケットの作成に失敗しました。",
+    -10002: "IPC Data Socket Creation Error - データ通信ソケットの作成に失敗しました。",
+    -10001: "IPC Event Socket Creation Error - イベント通知ソケットの作成に失敗しました。",
+    -10000: "IPC Error - プロセス間通信の一般的なエラーです。",
+    -9999: "Startup Path Not Found - MetaTrader 5の実行パスが見つかりませんでした。",
+    -8: "Insufficient Buffer - データ受信バッファが不足しています。",
+    -7: "Structure Too Small - データ構造のサイズが不足しています。",
+    -6: "No Data - リクエストされたデータが利用できません。",
+    -5: "Internal Error - MetaTrader 5ターミナルの内部エラー。",
+    -4: "Insufficient Memory - 関数を実行するためのメモリが不足しています。",
+    -3: "Invalid Parameter - 関数に無効なパラメータが渡されました。",
+    -2: "Communication with terminal not established - ターミナルとの通信が確立されていません。",
+    -1: "Unknown Error - 原因不明のエラーです。",
+    0: "No Error - 操作は正常に完了しました。",
 }
 
-def get_detailed_error(error_code: int, error_message: str) -> str:
-    """Get detailed explanation for MT5 error code"""
-    detailed_explanation = MT5_ERROR_CODES.get(error_code, "Unknown error code")
-    return f"Error code: {error_code}, Message: {error_message}\nDetailed explanation: {detailed_explanation}"
+def get_detailed_error(error_code, error_message):
+    """MT5エラーコードの詳細な説明を取得する"""
+    detailed_explanation = MT5_ERROR_CODES.get(error_code, "不明なエラーコード")
+    return f"エラーコード: {error_code}, メッセージ: {error_message}\n詳細な説明: {detailed_explanation}"
 
 def get_system_info() -> Dict[str, Any]:
-    """Collect system information"""
-    return {
-        "os": platform.system(),
-        "os_version": platform.version(),
-        "python_version": platform.python_version(),
-        "architecture": platform.architecture(),
-        "machine": platform.machine(),
-        "processor": platform.processor(),
-        "memory": None,  # Memory info can be obtained with psutil if needed
+    """システムの情報を収集する"""
+    info = {}
+    
+    # OS情報
+    info['os'] = platform.system()
+    info['os_release'] = platform.release()
+    info['os_version'] = platform.version()
+    
+    # メモリ情報
+    memory = psutil.virtual_memory()
+    info['memory_total'] = round(memory.total / (1024 * 1024))  # MB単位
+    info['memory_used'] = round(memory.used / (1024 * 1024))    # MB単位
+    info['memory_percent'] = memory.percent
+    
+    # CPU情報
+    info['cpu_count'] = psutil.cpu_count(logical=True)
+    info['cpu_percent'] = psutil.cpu_percent(interval=0.1)
+    
+    # ディスク情報
+    disk = psutil.disk_usage('/')
+    info['disk_total'] = round(disk.total / (1024 * 1024 * 1024), 2)  # GB単位
+    info['disk_used'] = round(disk.used / (1024 * 1024 * 1024), 2)    # GB単位
+    info['disk_percent'] = disk.percent
+    
+    # 環境変数情報
+    env_vars = {}
+    for key in ['DISPLAY', 'XAUTHORITY', 'WAYLAND_DISPLAY', 'WINEPREFIX', 'WINEDEBUG', 
+                'HOME', 'TERM', 'SHELL', 'USER', 'LANG', 'MT5_HEADLESS']:
+        if key in os.environ:
+            env_vars[key] = os.environ[key]
+    info['env_vars'] = env_vars
+    
+    # ウィンドウシステム情報（macOSの場合）
+    if platform.system() == 'Darwin':
+        try:
+            # macOSでアクティブなウィンドウ確認コマンド
+            window_check = subprocess.run(
+                ["osascript", "-e", 'tell application "System Events" to get name of processes whose visible is true'],
+                capture_output=True, text=True, timeout=2
+            )
+            info['visible_apps'] = window_check.stdout.strip().split(", ")
+        except Exception as e:
+            info['visible_apps_error'] = str(e)
+    
+    # Wine情報（macOSの場合）
+    if platform.system() == 'Darwin':
+        try:
+            # Wine/CrossOverのバージョン確認
+            wine_check = subprocess.run(
+                ["wine", "--version"], capture_output=True, text=True, timeout=2
+            )
+            info['wine_version'] = wine_check.stdout.strip()
+            
+            # Wine設定の確認
+            wine_cfg = subprocess.run(
+                ["wine", "cmd", "/c", "echo %USERPROFILE%"], 
+                capture_output=True, text=True, timeout=2
+            )
+            info['wine_userprofile'] = wine_cfg.stdout.strip()
+        except Exception as e:
+            info['wine_info_error'] = str(e)
+    
+    # 実行中のプロセス情報
+    try:
+        gui_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'username']):
+            # GUIプロセスと考えられるもの
+            if any(x in proc.info['name'].lower() for x in ['terminal', 'mt5', 'metatrader', 'wine']):
+                proc_info = {
+                    'pid': proc.info['pid'],
+                    'name': proc.info['name'],
+                    'username': proc.info['username'],
+                }
+                try:
+                    # 追加情報の取得
+                    with proc.oneshot():
+                        proc_info['cpu_percent'] = proc.cpu_percent(interval=0.1)
+                        proc_info['memory_percent'] = proc.memory_percent()
+                        proc_info['status'] = proc.status()
+                        proc_info['create_time'] = datetime.fromtimestamp(proc.create_time()).strftime('%Y-%m-%d %H:%M:%S')
+                        proc_info['cmdline'] = proc.cmdline()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
+                gui_processes.append(proc_info)
+        info['gui_processes'] = gui_processes
+    except Exception as e:
+        info['processes_error'] = str(e)
+    
+    return info
+
+def check_gui_status(process_pid):
+    """MT5プロセスがGUIウィンドウを表示しているかを確認する"""
+    result = {
+        'has_window': False,
+        'window_info': None,
+        'error': None,
+        'os': platform.system()
     }
+    
+    try:
+        if platform.system() == 'Windows':
+            # Windowsの場合
+            import win32gui
+            import win32process
+            
+            def callback(hwnd, result):
+                try:
+                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                    if pid == process_pid and win32gui.IsWindowVisible(hwnd):
+                        text = win32gui.GetWindowText(hwnd)
+                        if text and ('MetaTrader' in text or 'MT5' in text):
+                            rect = win32gui.GetWindowRect(hwnd)
+                            result['windows'].append({
+                                'handle': hwnd,
+                                'title': text,
+                                'rect': rect,
+                                'visible': win32gui.IsWindowVisible(hwnd),
+                                'enabled': win32gui.IsWindowEnabled(hwnd)
+                            })
+                            result['has_window'] = True
+                except Exception as e:
+                    result['errors'].append(str(e))
+                return True
+            
+            windows_result = {'windows': [], 'has_window': False, 'errors': []}
+            win32gui.EnumWindows(callback, windows_result)
+            result['has_window'] = windows_result['has_window']
+            result['window_info'] = windows_result['windows']
+            result['error'] = windows_result['errors'] if windows_result['errors'] else None
+            
+        elif platform.system() == 'Darwin':
+            # macOSの場合
+            try:
+                # AppleScriptを使用してウィンドウを確認
+                script = '''
+                tell application "System Events"
+                    set windowList to {}
+                    set allProcesses to processes whose unix id is %d
+                    repeat with proc in allProcesses
+                        set procName to name of proc
+                        set procWindows to windows of proc
+                        repeat with win in procWindows
+                            set winName to name of win
+                            set winPos to position of win
+                            set winSize to size of win
+                            set end of windowList to {name:procName, window:winName, position:winPos, size:winSize}
+                        end repeat
+                    end repeat
+                    return windowList
+                end tell
+                ''' % process_pid
+                
+                proc = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True, text=True, timeout=3
+                )
+                
+                if proc.stdout.strip():
+                    result['has_window'] = True
+                    result['window_info'] = proc.stdout.strip()
+                
+                # Wineのウィンドウもチェック
+                wine_script = '''
+                tell application "System Events"
+                    set wineWindows to {}
+                    set wineProcs to processes whose name contains "wine"
+                    repeat with proc in wineProcs
+                        set procName to name of proc
+                        set procWindows to windows of proc
+                        repeat with win in procWindows
+                            set winName to name of win
+                            if winName contains "MetaTrader" or winName contains "MT5" then
+                                set winPos to position of win
+                                set winSize to size of win
+                                set end of wineWindows to {name:procName, window:winName, position:winPos, size:winSize}
+                            end if
+                        end repeat
+                    end repeat
+                    return wineWindows
+                end tell
+                '''
+                
+                wine_proc = subprocess.run(
+                    ["osascript", "-e", wine_script],
+                    capture_output=True, text=True, timeout=3
+                )
+                
+                if wine_proc.stdout.strip():
+                    result['has_wine_window'] = True
+                    result['wine_window_info'] = wine_proc.stdout.strip()
+                
+            except Exception as e:
+                result['error'] = str(e)
+        
+        # プロセスの詳細情報も収集
+        try:
+            process = psutil.Process(process_pid)
+            result['process_info'] = {
+                'name': process.name(),
+                'status': process.status(),
+                'cpu_percent': process.cpu_percent(interval=0.1),
+                'memory_info': {
+                    'rss': process.memory_info().rss / (1024 * 1024),  # MB
+                    'vms': process.memory_info().vms / (1024 * 1024)   # MB
+                },
+                'create_time': datetime.fromtimestamp(process.create_time()).strftime('%Y-%m-%d %H:%M:%S'),
+                'cmdline': process.cmdline(),
+                'cwd': process.cwd(),
+                'num_threads': process.num_threads(),
+                'children': [{'pid': c.pid, 'name': c.name()} for c in process.children()]
+            }
+        except Exception as e:
+            result['process_info_error'] = str(e)
+        
+    except Exception as e:
+        result['error'] = str(e)
+    
+    return result
 
 class SessionManager:
     def __init__(self, base_path: str, portable_mt5_path: str):
@@ -266,6 +477,13 @@ ProxyEnable=0
 CertInstall=0
 NewsEnable=0
 AutoUpdate=0
+[Window]
+Maximized=0
+Width=1
+Height=1
+Left=-10000
+Top=-10000
+StartupMode=2
 """
             config_dir = os.path.join(self.template_dir, "Config")
             os.makedirs(config_dir, exist_ok=True)
@@ -281,315 +499,322 @@ AutoUpdate=0
             logger.exception(f"Error occurred while creating template directory: {e}")
             # Don't re-raise the exception to allow session creation to continue
     
-    def _run_mt5_process(self, mt5_exec_path: str, session_dir: str, port: int) -> Tuple[subprocess.Popen, Any]:
-        """Start MT5 process and record output"""
-        # MT5プロセスの起動（ポート指定あり）
-        cmd = [mt5_exec_path, f"/port:{port}", "/portable"]
-        logger.info(f"実行コマンド: {' '.join(cmd)}")
+    def _run_mt5_process(self, session_dir: Path, port: int) -> bool:
+        """MT5プロセスを起動する"""
+        logger.info(f"MT5プロセスを起動しています（ディレクトリ: {session_dir}, ポート: {port}）")
         
         try:
-            # プロセス起動時のエラー処理を強化
-            # DETACHED_PROCESSフラグを追加してコンソールウィンドウなしで実行
-            proc = subprocess.Popen(
-                cmd,
-                cwd=session_dir,
+            # 実行コマンドを構築
+            executable = os.path.join(session_dir, "terminal64.exe")
+            if not os.path.exists(executable):
+                logger.error(f"MT5実行ファイルが見つかりません: {executable}")
+                return False
+            
+            command = [executable, "/portable", f"/port:{port}"]
+            logger.debug(f"実行コマンド: {' '.join(command)}")
+            
+            # システム情報をログに記録
+            sys_info = get_system_info()
+            logger.info(f"MT5起動前のシステム情報: {json.dumps(sys_info, ensure_ascii=False, indent=2)}")
+            
+            # プロセスを起動
+            process = subprocess.Popen(
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                cwd=str(session_dir),
                 encoding='utf-8',
-                errors='replace',
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
+                errors='replace'
             )
             
-            logger.info(f"MT5プロセスが起動しました: PID={proc.pid}")
+            # プロセスIDをログに記録
+            pid = process.pid
+            logger.info(f"MT5プロセスが起動しました。PID: {pid}")
             
-            # Non-blocking attempt to read output
-            stdout_data = ""
-            stderr_data = ""
+            # プロセスの状態確認を行う
+            time.sleep(2)  # プロセスが起動する時間を少し待つ
             
-            # Read output while process is starting
+            if process.poll() is not None:
+                # プロセスが既に終了している場合
+                return_code = process.poll()
+                stdout, stderr = process.communicate(timeout=1)
+                logger.error(f"MT5プロセスが即座に終了しました。リターンコード: {return_code}")
+                logger.error(f"標準出力: {stdout}")
+                logger.error(f"標準エラー: {stderr}")
+                return False
+            
+            # プロセス情報のモニタリング
             try:
-                # Wait a certain amount of time
-                time.sleep(5)
+                p = psutil.Process(pid)
+                logger.info(f"プロセス情報: 名前={p.name()}, 状態={p.status()}")
+                logger.info(f"メモリ使用量: {p.memory_info().rss / (1024 * 1024):.2f} MB")
+                logger.info(f"CPU使用率: {p.cpu_percent(interval=0.1):.2f}%")
                 
-                # Read standard output and error (non-blocking)
-                if proc.stdout:
-                    for _ in range(10):  # 最大10行まで読み込む（無限ループ防止）
-                        line = proc.stdout.readline()
-                        if not line:
-                            break
-                        stdout_data += line
-                        logger.debug(f"MT5 STDOUT: {line.strip()}")
+                # 子プロセスの確認
+                children = p.children(recursive=True)
+                if children:
+                    logger.info(f"子プロセス数: {len(children)}")
+                    for child in children:
+                        logger.info(f"子プロセス: PID={child.pid}, 名前={child.name()}")
+                else:
+                    logger.info("子プロセスはありません")
                 
-                if proc.stderr:
-                    for _ in range(10):  # 最大10行まで読み込む（無限ループ防止）
-                        line = proc.stderr.readline()
-                        if not line:
-                            break
-                        stderr_data += line
-                        logger.debug(f"MT5 STDERR: {line.strip()}")
+                # GUIウィンドウの状態を確認
+                gui_status = check_gui_status(pid)
+                logger.info(f"GUIウィンドウの状態: {json.dumps(gui_status, ensure_ascii=False, indent=2)}")
+                
+                # MT5のGUIが表示されない場合のログ
+                if not gui_status.get('has_window', False):
+                    logger.warning("MT5のGUIウィンドウが検出されませんでした")
+                    
+                    # 追加のデバッグ情報を収集
+                    # 環境変数をログに記録
+                    wine_env_vars = {k: v for k, v in os.environ.items() if 'wine' in k.lower() or 'display' in k.lower()}
+                    logger.debug(f"Wine関連の環境変数: {wine_env_vars}")
+                    
+                    # プロセスの標準出力/エラー出力を非ブロッキングで読み取り
+                    stdout_data, stderr_data = "", ""
+                    try:
+                        # 標準出力を確認
+                        if process.stdout:
+                            stdout_ready, _, _ = select.select([process.stdout], [], [], 0.5)
+                            if stdout_ready:
+                                stdout_data = process.stdout.read(4096)
+                                logger.debug(f"MT5プロセスの標準出力: {stdout_data}")
+                        
+                        # 標準エラーを確認
+                        if process.stderr:
+                            stderr_ready, _, _ = select.select([process.stderr], [], [], 0.5)
+                            if stderr_ready:
+                                stderr_data = process.stderr.read(4096)
+                                logger.debug(f"MT5プロセスの標準エラー: {stderr_data}")
+                    except Exception as e:
+                        logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
+                
+                # プロセスクリーンアップ関数を登録
+                def cleanup_process():
+                    try:
+                        if p.is_running():
+                            logger.info(f"MT5プロセス(PID: {pid})を終了します")
+                            p.terminate()
+                            try:
+                                p.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                logger.warning(f"MT5プロセス(PID: {pid})が5秒以内に終了しませんでした。強制終了します")
+                                p.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+                        logger.warning(f"プロセスクリーンアップ中にエラーが発生しました: {e}")
+                
+                # アプリケーション終了時にプロセスをクリーンアップ
+                atexit.register(cleanup_process)
+                
+            except psutil.NoSuchProcess:
+                logger.error(f"プロセス(PID: {pid})が見つかりません")
             except Exception as e:
-                logger.warning(f"プロセス出力読み取り中にエラーが発生しました: {e}")
+                logger.error(f"プロセス情報の取得中にエラーが発生しました: {e}")
             
-            # Check process status
-            returncode = proc.poll()
-            if returncode is not None:
-                logger.error(f"MT5プロセスが予期せず終了しました。リターンコード: {returncode}")
-                output = "== STDOUT ==\n" + stdout_data + "\n== STDERR ==\n" + stderr_data
-                logger.error(f"MT5プロセス出力:\n{output}")
-                raise RuntimeError(f"MT5プロセスの起動に失敗しました。リターンコード: {returncode}")
+            return True
             
-            return proc, {"stdout": stdout_data, "stderr": stderr_data}
         except Exception as e:
-            logger.exception(f"MT5プロセス起動中にエラーが発生しました: {e}")
-            raise
+            logger.error(f"MT5プロセスの起動中にエラーが発生しました: {str(e)}")
+            traceback.print_exc()
+            return False
     
-    def _initialize_mt5(self, mt5_exec_path: str, login: int, password: str, server: str) -> Dict[str, Any]:
-        """Initialize MT5 and return detailed results"""
-        logger.info("Starting MT5 initialization...")
-        logger.info(f"MT5 path: {mt5_exec_path}")
-        logger.info(f"Login: {login}, Server: {server}")
+    def _initialize_mt5(self, server, login, password, timeout=60) -> Tuple[bool, str]:
+        """
+        MT5を初期化して接続します。二段階で処理を行います:
+        1. MT5の初期化
+        2. MT5へのログイン
         
-        # Check MT5 module state before initialization
+        Args:
+            server: MT5サーバー名
+            login: MT5ログインID
+            password: MT5パスワード
+            timeout: 初期化のタイムアウト時間（秒）
+        
+        Returns:
+            (成功したかどうか, エラーメッセージ)
+        """
         try:
-            mt5_initialized = mt5.initialize() if not mt5.initialize.__self__.terminal_info() else True
-            if mt5_initialized:
-                logger.info("MT5 is already initialized. Shutting down.")
-                mt5.shutdown()
-                time.sleep(2)
-        except Exception as e:
-            logger.warning(f"Error during MT5 initial state check: {e}")
-        
-        # Attempt initialization
-        start_time = time.time()
-        success = False
-        error_code = None
-        error_message = None
-        
-        try:
-            # ポータブルモードを明示的に指定
-            success = mt5.initialize(
-                path=mt5_exec_path,
+            # まず初期化を実行
+            self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {self.session_id}）")
+            initialize_result = mt5.initialize(
+                path=self.mt5_exe_path,
                 login=login,
                 password=password,
                 server=server,
-                timeout=180000,  # 3分に延長
-                portable=True    # ポータブルモードを明示的に指定
+                timeout=timeout * 1000
             )
             
-            if not success:
-                error = mt5.last_error()
-                error_code = error[0]
-                error_message = error[1]
-                logger.error(f"MT5 initialization error: {error}")
-                logger.error(f"Details: {get_detailed_error(error_code, error_message)}")
-            else:
-                # If successful, get connection information
-                logger.info("MT5 initialization successful")
-                try:
-                    terminal_info = mt5.terminal_info()
-                    account_info = mt5.account_info()
-                    
-                    logger.info(f"Terminal info: connected={terminal_info.connected}, trade_allowed={terminal_info.trade_allowed}")
-                    if account_info:
-                        logger.info(f"Account info: login ID={account_info.login}, server={account_info.server}")
-                except Exception as e:
-                    logger.warning(f"Error while retrieving MT5 information: {e}")
+            # 初期化に失敗した場合
+            if not initialize_result:
+                error_code = mt5.last_error()
+                error_msg = f"MT5の初期化に失敗しました。"
+                detailed_error = get_detailed_error(error_code, error_msg)
+                self.logger.error(detailed_error)
+                return False, detailed_error
+            
+            self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {self.session_id}）")
+            
+            # ログイン処理
+            self.logger.info(f"MT5サーバーへのログインを開始します（セッション: {self.session_id}）")
+            account_info = mt5.account_info()
+            if account_info is None:
+                error_code = mt5.last_error()
+                error_msg = f"MT5サーバーへのログインに失敗しました。"
+                detailed_error = get_detailed_error(error_code, error_msg)
+                self.logger.error(detailed_error)
+                # 失敗した場合はMT5を終了して資源を解放
+                mt5.shutdown()
+                return False, detailed_error
+            
+            # ログイン情報のログ出力
+            self.logger.info(
+                f"MT5サーバーへのログインに成功しました: "
+                f"アカウント名={account_info.name}, "
+                f"サーバー={account_info.server}, "
+                f"残高={account_info.balance}, "
+                f"証拠金レベル={account_info.margin_level}%"
+            )
+            
+            return True, ""
+            
         except Exception as e:
-            logger.exception(f"Exception occurred during MT5 initialization: {e}")
-            error_message = str(e)
-            error_code = -99999
-            success = False
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"MT5 initialization process time: {elapsed_time:.2f} seconds")
-        
-        return {
-            "success": success,
-            "error_code": error_code,
-            "error_message": error_message,
-            "elapsed_time": elapsed_time
-        }
-    
-    def create_session(self, login: int, password: str, server: str) -> str:
-        """
-        Create a new MT5 session
-        
-        Args:
-            login: MT5 login ID
-            password: MT5 password
-            server: MT5 server
+            error_msg = f"MT5の初期化中に予期せぬエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
+            self.logger.error(error_msg)
             
-        Returns:
-            Session ID
-        """
-        # Generate session ID
-        sid = uuid.uuid4().hex
-        proc = None  # 後のクリーンアップのために変数を初期化
-        
-        try:
-            # Create directory for the session
-            session_dir = os.path.join(self.base_path, sid)
-            if os.path.exists(session_dir):
-                shutil.rmtree(session_dir)
-            os.makedirs(session_dir, exist_ok=True)
-            
-            # Assign a port for this session
-            port = self._next_port
-            self._next_port += 1
-            
-            logger.info(f"新しいセッションを作成します: id={sid}, login={login}, server={server}, port={port}")
-            logger.info(f"セッションディレクトリ: {session_dir}")
-            
-            # Check if template directory exists
-            if not os.path.exists(self.template_dir) or not os.path.isfile(os.path.join(self.template_dir, "terminal64.exe")):
-                logger.warning("テンプレートディレクトリが見つからないか不完全です。再作成します。")
-                self._prepare_template_directory()
-            
-            # Copy files from template directory (fast)
-            start_time = time.time()
-            logger.info("MT5ファイルをテンプレートからセッションディレクトリにコピーしています...")
-            
-            for item in os.listdir(self.template_dir):
-                src_path = os.path.join(self.template_dir, item)
-                dst_path = os.path.join(session_dir, item)
-                
-                if os.path.isfile(src_path):
-                    shutil.copy2(src_path, dst_path)
-                elif os.path.isdir(src_path):
-                    shutil.copytree(src_path, dst_path, symlinks=True)
-            
-            # Overwrite session-specific configuration files
-            config_dir = os.path.join(session_dir, "Config")
-            os.makedirs(config_dir, exist_ok=True)
-            
-            # Create login.ini (session-specific login information)
-            login_ini_content = f"""[Login]
-Server={server}
-Login={login}
-Password={password}
-ProxyEnable=0
-"""
-            with open(os.path.join(config_dir, "login.ini"), "w", encoding='utf-8') as f:
-                f.write(login_ini_content)
-            
-            copy_time = time.time() - start_time
-            logger.info(f"MT5ファイルのコピーが完了しました (所要時間: {copy_time:.2f} 秒)")
-            
-            # Session-specific MT5 executable path
-            mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
-            
-            if not os.path.exists(mt5_exec_path):
-                raise FileNotFoundError(f"MT5実行ファイルが見つかりません: {mt5_exec_path}")
-            
-            logger.info(f"MT5実行ファイルが存在します: {mt5_exec_path}")
-            
-            # 既存のMT5プロセスをシャットダウン
+            # 例外が発生した場合はMT5を終了して資源を解放
             try:
                 mt5.shutdown()
-                logger.info("既存のMT5接続をシャットダウンしました")
-                time.sleep(2)  # シャットダウン完了を待機
             except:
                 pass
-                
-            # Start MT5 process and get output
-            proc, process_output = self._run_mt5_process(mt5_exec_path, session_dir, port)
             
-            # Wait for process to start up
-            logger.info("MT5プロセスの起動を待機しています... (60秒)")
-            time.sleep(60)  # 30秒から60秒に延長
+            return False, error_msg
+    
+    def create_session(self, login: int, password: str, server: str) -> str:
+        """Create a new MT5 session with the given parameters"""
+        # Generate a unique session ID
+        session_id = str(uuid.uuid4().hex)
+        self.logger.info(f"新しいセッションを作成しています。セッションID: {session_id}")
+        
+        # Prepare session directory
+        session_dir = os.path.join(self.base_path, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        self.logger.info(f"セッションディレクトリを作成しました: {session_dir}")
+        
+        try:
+            # Prepare MT5 directory
+            mt5_data_dir = os.path.join(session_dir, 'MQL5')
+            os.makedirs(mt5_data_dir, exist_ok=True)
             
-            # プロセスの状態を確認
-            if proc.poll() is not None:
-                error_msg = f"MT5プロセスが予期せず終了しました。リターンコード: {proc.poll()}"
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
+            # Create necessary subdirectories
+            for subdir in ['Logs', 'Files', 'Experts', 'Include', 'Libraries', 'Images']:
+                os.makedirs(os.path.join(mt5_data_dir, subdir), exist_ok=True)
+            
+            # Copy necessary files if we have a template directory
+            if os.path.exists(self.template_dir):
+                self.logger.info(f"テンプレートディレクトリから必要なファイルをコピーしています: {self.template_dir}")
+                self._copy_template_files(self.template_dir, mt5_data_dir)
+            
+            # Create configuration file
+            self._create_mt5_config(session_dir, login, password, server)
+            
+            # Get the path to the MT5 executable
+            mt5_exec_path = self._get_mt5_exec_path(session_id)
+            if not mt5_exec_path or not os.path.exists(mt5_exec_path):
+                error_msg = f"MT5実行ファイルが見つかりません: {mt5_exec_path}"
+                self.logger.error(error_msg)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "session_id": session_id,
+                    "session_dir": session_dir
+                }
+            
+            # Store the path for later use
+            self.mt5_exe_path = mt5_exec_path
+            
+            # Start the MT5 process
+            try:
+                self._run_mt5_process(session_dir, self._next_port)
+            except Exception as e:
+                error_msg = f"MT5プロセスの起動に失敗しました: {str(e)}"
+                self.logger.error(f"{error_msg}\n{traceback.format_exc()}")
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "session_id": session_id,
+                    "session_dir": session_dir,
+                    "mt5_path": mt5_exec_path
+                }
             
             # Connect to MT5
-            init_result = self._initialize_mt5(mt5_exec_path, login, password, server)
+            init_success, error_message = self._initialize_mt5(server, login, password)
             
-            if not init_result["success"]:
+            if not init_success:
                 # If there's an error, terminate the process and clean up
-                error_code = init_result["error_code"]
-                error_message = init_result["error_message"]
+                self.logger.error(f"MT5の初期化に失敗しました: {error_message}")
                 
                 # Create more detailed error information
-                error_detail = {
-                    "error_code": error_code,
-                    "error_message": error_message,
-                    "detailed_error": get_detailed_error(error_code, error_message),
-                    "process_output": process_output,
-                    "session_dir": session_dir,
-                    "mt5_path": mt5_exec_path,
-                    "elapsed_time": init_result["elapsed_time"]
-                }
+                error_info = error_message
                 
-                logger.error(f"MT5初期化エラーの詳細: {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
-                
-                if proc.poll() is None:  # プロセスがまだ実行中の場合
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                
+                # Terminate the process
                 try:
-                    # Save error information
-                    with open(os.path.join(session_dir, "error_log.json"), "w", encoding="utf-8") as f:
-                        json.dump(error_detail, f, indent=2, ensure_ascii=False)
-                    
-                    # Don't delete the directory, keep it for error diagnosis
-                    # shutil.rmtree(session_dir)
-                    logger.info(f"エラー診断のためにセッションディレクトリを保持します: {session_dir}")
-                except Exception as e:
-                    logger.error(f"エラーログの保存中に例外が発生しました: {e}")
-                    
-                detailed_error = get_detailed_error(error_code, error_message)
-                raise RuntimeError(f"MT5初期化エラー: {error_code} - {error_message}\n{detailed_error}")
+                    self._terminate_mt5_process(session_id)
+                except Exception as term_error:
+                    self.logger.error(f"MT5プロセスの終了中にエラーが発生しました: {term_error}")
+                
+                # Keep session directory for diagnostics
+                self.logger.info(f"診断のためにセッションディレクトリを保持しています: {session_dir}")
+                
+                return {
+                    "success": False,
+                    "error": error_info,
+                    "session_id": session_id,
+                    "session_dir": session_dir,
+                    "mt5_path": mt5_exec_path
+                }
             
-            logger.info("MT5初期化が成功しました")
+            # If we got here, we have a successful connection
+            self.logger.info(f"MT5セッションが正常に初期化されました。セッションID: {session_id}")
             
-            # Save session information
-            now = datetime.now()
-            session = Session(
-                id=sid,
+            # Store session information
+            self._sessions[session_id] = Session(
+                id=session_id,
                 login=login,
                 server=server,
-                proc=proc,
-                port=port,
+                proc=None,
+                port=None,
                 mt5_path=mt5_exec_path,
-                created_at=now,
-                last_accessed=now
+                created_at=datetime.now(),
+                last_accessed=datetime.now()
             )
-            self._sessions[sid] = session
             
-            return sid
+            return {
+                "success": True,
+                "session_id": session_id,
+                "session_dir": session_dir,
+                "mt5_path": mt5_exec_path
+            }
             
         except Exception as e:
-            logger.exception(f"セッション作成中に例外が発生しました: {e}")
+            error_msg = f"セッション作成中に予期せぬエラーが発生しました: {str(e)}"
+            self.logger.error(f"{error_msg}\n{traceback.format_exc()}")
             
-            # Log stack trace
-            trace = traceback.format_exc()
-            logger.error(f"スタックトレース: {trace}")
-            
-            # Cleanup
+            # Attempt to terminate the process if it exists
             try:
-                if proc is not None and proc.poll() is None:  # プロセスがまだ実行中の場合
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+                if session_id in self._sessions:
+                    self._terminate_mt5_process(session_id)
             except:
                 pass
-                
-            # Keep directory for error diagnosis
-            # try:
-            #     shutil.rmtree(session_dir)
-            # except:
-            #     pass
-                
-            raise
+            
+            return {
+                "success": False,
+                "error": error_msg,
+                "session_id": session_id,
+                "session_dir": session_dir
+            }
     
     def get_session(self, sid: str) -> Session:
         """
@@ -712,6 +937,70 @@ ProxyEnable=0
             self.close_session(sid)
         
         return len(session_ids)
+
+    def _terminate_mt5_process(self, session_id: str):
+        """MT5プロセスを終了する"""
+        if session_id not in self._sessions:
+            self.logger.warning(f"セッション {session_id} のプロセスが見つかりません")
+            return False
+        
+        session = self._sessions[session_id]
+        if session.proc.poll() is None:  # プロセスがまだ実行中
+            self.logger.info(f"MT5プロセス（セッションID: {session_id}）を終了します")
+            try:
+                # まずは通常終了を試みる
+                session.proc.terminate()
+                try:
+                    session.proc.wait(timeout=5)
+                    self.logger.info(f"MT5プロセスが正常に終了しました（セッションID: {session_id}）")
+                    self._sessions.pop(session_id)
+                    return True
+                except subprocess.TimeoutExpired:
+                    # 5秒待っても終了しない場合は強制終了
+                    self.logger.warning(f"MT5プロセスが応答しないため強制終了します（セッションID: {session_id}）")
+                    session.proc.kill()
+                    session.proc.wait(timeout=5)
+                    self.logger.info(f"MT5プロセスを強制終了しました（セッションID: {session_id}）")
+                    self._sessions.pop(session_id)
+                    return True
+            except Exception as e:
+                self.logger.error(f"MT5プロセス終了中にエラーが発生しました: {str(e)}")
+                return False
+        else:
+            # プロセスはすでに終了している
+            self.logger.info(f"MT5プロセスはすでに終了しています（セッションID: {session_id}）")
+            self._sessions.pop(session_id)
+            return True
+
+    def destroy_session(self, session_id: str) -> bool:
+        """指定されたセッションIDのMT5セッションを終了します
+        
+        Args:
+            session_id: 終了するセッションのID
+            
+        Returns:
+            bool: セッションが正常に終了したかどうか
+        """
+        self.logger.info(f"セッション {session_id} を終了します")
+        
+        if session_id not in self._sessions:
+            self.logger.warning(f"セッション {session_id} が見つかりません")
+            return False
+        
+        # MT5プロセスを終了する
+        terminated = self._terminate_mt5_process(session_id)
+        
+        # セッションディレクトリの削除（オプション）
+        try:
+            session_dir = os.path.join(self.base_path, session_id)
+            if os.path.exists(session_dir) and self.config.clean_sessions:
+                shutil.rmtree(session_dir)
+                self.logger.info(f"セッションディレクトリを削除しました: {session_dir}")
+        except Exception as e:
+            self.logger.error(f"セッションディレクトリの削除中にエラーが発生しました: {str(e)}")
+            # ディレクトリの削除に失敗してもセッション終了は成功とみなす
+        
+        return terminated
 
 # Global SessionManager instance
 _session_manager: Optional[SessionManager] = None
