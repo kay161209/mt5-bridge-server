@@ -701,7 +701,7 @@ StartupMode=2
             connection_file = os.path.join(config_dir, "connection_settings.ini")
             accounts_file = os.path.join(config_dir, "accounts_settings.ini")
             login_file = os.path.join(config_dir, "login.ini")
-            account_dat_file = os.path.join(session_dir, "accounts.dat")
+            accounts_dat_file = os.path.join(session_dir, "accounts.dat")
             
             # ログイン情報ファイルと、アカウントデータファイルの存在確認
             has_login_files = (
@@ -710,7 +710,7 @@ StartupMode=2
                 os.path.exists(login_file)
             )
             
-            has_account_data = os.path.exists(account_dat_file)
+            has_account_data = os.path.exists(accounts_dat_file)
             
             self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {session_id}）")
             
