@@ -6,7 +6,7 @@ import io
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from app.routes import router as api_router
 from app.config import settings
-from app.session_manager import init_session_manager, get_session_manager, cleanup_resources
+from app.session_manager import init_session_manager, get_session_manager, cleanup_resources, SessionManager
 import asyncio
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import codecs
