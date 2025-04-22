@@ -1195,6 +1195,17 @@ StartupMode=2
                     dst_path = os.path.join(os.path.dirname(target_dir), file_name)
                     self.logger.info(f"ファイルをコピーします: {src_path} -> {dst_path}")
                     shutil.copy2(src_path, dst_path)
+            
+            # テンプレートディレクトリのConfig/accounts.datをコピー
+            template_config_dir = os.path.join(template_dir, "Config")
+            template_accounts_dat = os.path.join(template_config_dir, "accounts.dat")
+            if os.path.exists(template_accounts_dat):
+                dst_accounts_dat = os.path.join(os.path.dirname(target_dir), "accounts.dat")
+                self.logger.info(f"テンプレートからaccounts.datをコピーします: {template_accounts_dat} -> {dst_accounts_dat}")
+                shutil.copy2(template_accounts_dat, dst_accounts_dat)
+                self.logger.info("テンプレートのアカウントデータをコピーしました")
+            else:
+                self.logger.info(f"テンプレートにaccounts.datが見つかりません: {template_accounts_dat}")
                     
             # MT5のインストールディレクトリからログイン情報をコピー
             config_files_to_copy = [
