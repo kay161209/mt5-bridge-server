@@ -114,17 +114,7 @@ def create_mt5_session():
     with open(portable_path, "w") as f:
         f.write("portable")
     
-    # 2. login.iniファイルを作成
-    login_ini_path = os.path.join(config_dir, "login.ini")
-    with open(login_ini_path, "w", encoding="utf-8") as f:
-        f.write(f"[Login]\n")
-        f.write(f"Server={MT5_SERVER}\n")
-        f.write(f"Login={MT5_LOGIN}\n")
-        f.write(f"Password={MT5_PASSWORD}\n")
-        f.write(f"ProxyEnable=0\n")
-    logger.info(f"ログイン設定ファイルを作成しました: {login_ini_path}")
-    
-    # 3. terminal.iniファイルを作成 - GUIを非表示にする設定
+    # 2. terminal.iniファイルを作成 - GUIを非表示にする設定
     terminal_ini_path = os.path.join(config_dir, "terminal.ini")
     with open(terminal_ini_path, "w", encoding="utf-8") as f:
         f.write("[Window]\n")
@@ -140,6 +130,19 @@ def create_mt5_session():
         f.write("AutoUpdate=0\n")
         f.write("StartupMode=2\n")  # サイレントモード
     logger.info(f"terminal.iniファイルを作成しました: {terminal_ini_path}")
+    
+    # 重要: MT5実行ファイルをセッションディレクトリにコピー
+    try:
+        mt5_exe_dest = os.path.join(session_dir, "terminal64.exe")
+        # 既にファイルが存在する場合は上書きしない
+        if not os.path.exists(mt5_exe_dest):
+            import shutil
+            logger.info(f"MT5実行ファイルをコピーします: {MT5_PATH} -> {mt5_exe_dest}")
+            shutil.copy2(MT5_PATH, mt5_exe_dest)
+        else:
+            logger.info(f"MT5実行ファイルは既に存在します: {mt5_exe_dest}")
+    except Exception as e:
+        logger.error(f"MT5実行ファイルのコピーに失敗しました: {e}")
     
     return session_dir
 
@@ -170,143 +173,106 @@ def test_direct_initialize():
     except Exception as e:
         logger.warning(f"MT5モジュール操作中にエラーが発生しました: {e}")
     
+    # MT5プロセスを確実に終了
+    if os.name == 'nt':
+        try:
+            logger.info("既存のMT5プロセスを確認・終了します...")
+            subprocess.run(["taskkill", "/F", "/IM", "terminal64.exe"], 
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(2)
+        except Exception as e:
+            logger.warning(f"既存プロセス終了中にエラー: {e}")
+    
     # セッションディレクトリの準備
     session_dir = create_mt5_session()
-    mt5_proc = None
+    mt5_session_path = os.path.join(session_dir, "terminal64.exe")
     
+    if not os.path.exists(mt5_session_path):
+        logger.error(f"MT5実行ファイルがセッションディレクトリに存在しません: {mt5_session_path}")
+        return False
+    
+    logger.info("セッションディレクトリの準備が完了しました")
+    
+    # 直接APIを使った初期化
     try:
-        # MT5プロセスを起動する前にすべてのMT5プロセスを終了（オプション）
-        if os.name == 'nt':
-            try:
-                logger.info("既存のMT5プロセスを確認・終了します...")
-                subprocess.run(["taskkill", "/F", "/IM", "terminal64.exe"], 
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                time.sleep(2)
-            except Exception as e:
-                logger.warning(f"既存プロセス終了中にエラー: {e}")
-        
-        # MT5プロセスを起動
-        port = 8000  # 任意のポート番号
-        cmd = [MT5_PATH, f"/port:{port}", "/portable", "/skipupdate", "/config:terminal.ini", "/min"]
-        logger.info(f"MT5プロセス起動コマンド: {' '.join(cmd)}")
-        
-        creation_flags = 0
-        if os.name == 'nt':
-            creation_flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-        
-        mt5_proc = subprocess.Popen(
-            cmd,
-            cwd=session_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            creationflags=creation_flags
-        )
-        
-        logger.info(f"MT5プロセスを起動しました: PID={mt5_proc.pid}")
-        
-        # プロセスの起動を待つ
-        wait_time = 10
-        logger.info(f"{wait_time}秒間待機してMT5プロセスの起動を確認します...")
-        time.sleep(wait_time)
-        
-        # プロセスが実行中か確認
-        if mt5_proc.poll() is not None:
-            logger.error(f"MT5プロセスが終了しました: 終了コード={mt5_proc.poll()}")
-            stdout, stderr = mt5_proc.communicate()
-            logger.error(f"標準出力: {stdout}")
-            logger.error(f"標準エラー: {stderr}")
-            return False
-        
-        logger.info("MT5プロセスは正常に実行中です")
-        
-        # MT5の初期化を開始
-        logger.info("MT5 Pythonモジュールの初期化を開始します...")
+        logger.info("MT5 APIを使用して直接初期化を開始します...")
         start_time = time.time()
         
-        # MT5初期化パラメータを設定
-        logger.info(f"MT5初期化パラメータ:")
-        logger.info(f"  - パス: {MT5_PATH}")
+        # 初期化パラメータを設定
+        logger.info(f"初期化パラメータ:")
+        logger.info(f"  - パス: {mt5_session_path}")
         logger.info(f"  - ログイン: {MT5_LOGIN}")
         logger.info(f"  - サーバー: {MT5_SERVER}")
-        logger.info(f"  - ポート: {port}")
         
-        # 重要: 既に起動したプロセスに接続するためのパラメータを設定
-        # セッションディレクトリのMT5実行ファイルを指定し、ポートも一致させる
-        mt5_session_path = os.path.join(session_dir, "terminal64.exe")
-        
-        # 初期化パラメータを設定してMT5に接続
+        # 初期化を実行 - 実行ファイルのパスとポータブルモードだけを指定
         success = mt5.initialize(
-            path=mt5_session_path,  # セッションディレクトリのパスを使用
+            path=mt5_session_path,
+            portable=True,
+            timeout=60000  # 60秒
+        )
+        
+        # 初期化が成功したか確認
+        if not success:
+            error = mt5.last_error()
+            logger.error(f"MT5基本初期化エラー: {error}")
+            logger.error(get_detailed_error(error[0], error[1]))
+            return False
+        
+        logger.info("基本初期化成功。ログイン試行...")
+        
+        # ログイン試行
+        login_success = mt5.login(
             login=MT5_LOGIN,
-            password=MT5_PASSWORD,
-            server=MT5_SERVER,
-            timeout=60000,  # 60秒
-            portable=True
+            password=MT5_PASSWORD, 
+            server=MT5_SERVER
         )
         
         elapsed_time = time.time() - start_time
-        logger.info(f"初期化処理時間: {elapsed_time:.2f}秒")
+        logger.info(f"初期化・ログイン処理時間: {elapsed_time:.2f}秒")
         
-        if success:
-            logger.info("MT5初期化成功!")
-            
-            # 接続情報を表示
-            terminal_info = mt5.terminal_info()
-            logger.info(f"ターミナル情報:")
-            logger.info(f"  - 接続状態: {terminal_info.connected}")
-            logger.info(f"  - 取引許可: {terminal_info.trade_allowed}")
-            logger.info(f"  - メール有効: {terminal_info.email_enabled}")
-            logger.info(f"  - FTP有効: {terminal_info.ftp_enabled}")
-            logger.info(f"  - DLL許可: {terminal_info.dlls_allowed}")
-            
-            # アカウント情報を表示
-            account_info = mt5.account_info()
-            if account_info:
-                logger.info(f"アカウント情報:")
-                logger.info(f"  - ログインID: {account_info.login}")
-                logger.info(f"  - サーバー: {account_info.server}")
-                logger.info(f"  - 通貨: {account_info.currency}")
-                logger.info(f"  - レバレッジ: {account_info.leverage}")
-            else:
-                logger.warning("アカウント情報を取得できませんでした")
-            
-            # 利用可能なシンボル数を表示
+        if not login_success:
+            error = mt5.last_error()
+            logger.error(f"MT5ログインエラー: {error}")
+            logger.error(get_detailed_error(error[0], error[1]))
+            return False
+        
+        logger.info("MT5ログイン成功!")
+        
+        # 接続情報を表示
+        terminal_info = mt5.terminal_info()
+        logger.info(f"ターミナル情報:")
+        logger.info(f"  - 接続状態: {terminal_info.connected}")
+        logger.info(f"  - 取引許可: {terminal_info.trade_allowed}")
+        logger.info(f"  - メール有効: {terminal_info.email_enabled}")
+        logger.info(f"  - FTP有効: {terminal_info.ftp_enabled}")
+        logger.info(f"  - DLL許可: {terminal_info.dlls_allowed}")
+        
+        # アカウント情報を表示
+        account_info = mt5.account_info()
+        if account_info:
+            logger.info(f"アカウント情報:")
+            logger.info(f"  - ログインID: {account_info.login}")
+            logger.info(f"  - サーバー: {account_info.server}")
+            logger.info(f"  - 通貨: {account_info.currency}")
+            logger.info(f"  - レバレッジ: {account_info.leverage}")
+        else:
+            logger.warning("アカウント情報を取得できませんでした")
+        
+        # シンボル情報を表示
+        try:
             symbols_total = mt5.symbols_total()
             logger.info(f"利用可能なシンボル: {symbols_total}個")
             
-            # 最初の5つのシンボルを表示
-            symbols = mt5.symbols_get()[:5]
-            logger.info("シンボル一覧 (最初の5つ):")
-            for symbol in symbols:
-                logger.info(f"  - {symbol.name}")
-        else:
-            # エラー情報を表示
-            error = mt5.last_error()
-            error_code = error[0]
-            error_message = error[1]
-            
-            logger.error(f"MT5初期化エラー: {error}")
-            logger.error(get_detailed_error(error_code, error_message))
-            
-            # より詳細なデバッグ情報
-            logger.error(f"ログイン情報の詳細:")
-            logger.error(f"  - MT5_PATH: {MT5_PATH}")
-            logger.error(f"  - MT5_LOGIN: {MT5_LOGIN} (型: {type(MT5_LOGIN)})")
-            logger.error(f"  - MT5_SERVER: {MT5_SERVER}")
-            
-            # パスワードは表示しないがチェック
-            if not MT5_PASSWORD:
-                logger.error("  - MT5_PASSWORD: 設定されていないか空です")
-            elif len(MT5_PASSWORD) < 4:
-                logger.error("  - MT5_PASSWORD: 文字数が少なすぎます")
-            else:
-                logger.error("  - MT5_PASSWORD: 設定されています")
+            if symbols_total > 0:
+                symbols = mt5.symbols_get()[:5]
+                logger.info("シンボル一覧 (最初の5つ):")
+                for symbol in symbols:
+                    logger.info(f"  - {symbol.name}")
+        except Exception as e:
+            logger.warning(f"シンボル情報取得エラー: {e}")
+        
+        return login_success
                 
-        return success
-    
     except Exception as e:
         logger.exception(f"テスト実行中に例外が発生しました: {e}")
         logger.error(f"スタックトレース: {traceback.format_exc()}")
@@ -319,19 +285,6 @@ def test_direct_initialize():
             mt5.shutdown()
         except:
             pass
-        
-        # MT5プロセスのクリーンアップ
-        try:
-            if mt5_proc and mt5_proc.poll() is None:
-                logger.info(f"MT5プロセス(PID={mt5_proc.pid})を終了します")
-                mt5_proc.terminate()
-                try:
-                    mt5_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    logger.warning("プロセス終了待機がタイムアウトしました。強制終了します。")
-                    mt5_proc.kill()
-        except Exception as e:
-            logger.error(f"プロセス終了中にエラーが発生しました: {e}")
 
 def cleanup():
     """リソースのクリーンアップ"""
