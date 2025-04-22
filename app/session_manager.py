@@ -49,31 +49,34 @@ def configure_logger(name="session_manager", level=logging.DEBUG):
     lgr = logging.getLogger(name)
     lgr.setLevel(level)
     
-    # ハンドラがない場合のみ追加
-    if not lgr.handlers:
+    # ハンドラを追加する前に既存のハンドラを確認
+    if lgr.handlers:
+        lgr.debug(f"既存のロガーハンドラが存在するため新しいハンドラは追加しません: {len(lgr.handlers)}個")
+        return lgr
+        
+    try:
+        # ファイルハンドラ
+        os.makedirs('logs', exist_ok=True)
+        file_handler = logging.FileHandler(
+            os.path.join('logs', f'{name}.log'), 
+            encoding='utf-8', 
+            mode='a'
+        )
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        lgr.addHandler(file_handler)
+        
+        # コンソールハンドラ - エラー処理強化
         try:
-            # ファイルハンドラ
-            os.makedirs('logs', exist_ok=True)
-            file_handler = logging.FileHandler(
-                os.path.join('logs', f'{name}.log'), 
-                encoding='utf-8', 
-                mode='a'
-            )
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            file_handler.setFormatter(formatter)
-            lgr.addHandler(file_handler)
-            
-            # コンソールハンドラ - エラー処理強化
-            try:
-                # 通常はstdout.bufferを使用するが、閉じられている場合はシンプルなハンドラを使用
-                console_handler = logging.StreamHandler()
-                console_handler.setFormatter(formatter)
-                lgr.addHandler(console_handler)
-            except (ValueError, AttributeError):
-                pass
-        except Exception as e:
-            # ロガー設定時のエラーを処理
-            print(f"Logger configuration error: {e}")
+            # シンプルなハンドラを使用
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            lgr.addHandler(console_handler)
+        except (ValueError, AttributeError) as e:
+            lgr.warning(f"コンソールハンドラの追加に失敗しました: {e}")
+    except Exception as e:
+        # ロガー設定時のエラーを処理
+        print(f"Logger configuration error: {e}")
     
     return lgr
 
@@ -129,7 +132,7 @@ MT5_ERROR_CODES = {
     -10004: "IPC Initialization Error - プロセス間通信の初期化に失敗しました。",
     -10003: "IPC Test Socket Creation Error - テストソケットの作成に失敗しました。",
     -10002: "IPC Data Socket Creation Error - データ通信ソケットの作成に失敗しました。",
-    -10001: "IPC Event Socket Creation Error - イベント通知ソケットの作成に失敗しました。",
+    -10001: "IPC Event Socket Creation Error - イベント通知ソケット作成または通信送信に失敗しました。",
     -10000: "IPC Error - プロセス間通信の一般的なエラーです。",
     -9999: "Startup Path Not Found - MetaTrader 5の実行パスが見つかりませんでした。",
     -8: "Insufficient Buffer - データ受信バッファが不足しています。",
@@ -477,11 +480,11 @@ NewsEnable=0
 AutoUpdate=0
 [Window]
 Maximized=0
-Width=1
-Height=1
-Left=-10000
-Top=-10000
-StartupMode=2
+Width=800
+Height=600
+Left=100
+Top=100
+StartupMode=0
 """
             config_dir = os.path.join(self.template_dir, "Config")
             os.makedirs(config_dir, exist_ok=True)
@@ -545,7 +548,6 @@ StartupMode=2
                 
                 # 必要なオプションを追加
                 cmd_str += " /skipupdate"  # 更新をスキップ
-                cmd_str += " /min"         # 最小化して起動
                 
                 cmd = cmd_str
             else:
@@ -560,7 +562,6 @@ StartupMode=2
                 
                 # 必要なオプションを追加
                 cmd.append("/skipupdate")  # 更新をスキップ
-                cmd.append("/min")         # 最小化して起動
             
             self.logger.info(f"MT5起動コマンド: {cmd}")
             
@@ -577,11 +578,6 @@ StartupMode=2
                 )
             else:
                 creation_flags = 0
-                if platform.system() == 'Windows':
-                    # GUIを完全に非表示にするための設定
-                    import subprocess
-                    creation_flags = subprocess.CREATE_NO_WINDOW
-                
                 proc = subprocess.Popen(
                     cmd, 
                     cwd=session_dir,
@@ -590,8 +586,7 @@ StartupMode=2
                     universal_newlines=True,
                     encoding='utf-8',
                     bufsize=1,
-                    shell=True,
-                    creationflags=creation_flags
+                    shell=True
                 )
             
             pid = proc.pid
@@ -1199,14 +1194,16 @@ StartupMode=2
             # テンプレートディレクトリのConfig/accounts.datをコピー
             template_config_dir = os.path.join(template_dir, "Config")
             template_accounts_dat = os.path.join(template_config_dir, "accounts.dat")
+            session_base_dir = os.path.dirname(target_dir)
+            
             if os.path.exists(template_accounts_dat):
-                dst_accounts_dat = os.path.join(os.path.dirname(target_dir), "accounts.dat")
+                dst_accounts_dat = os.path.join(session_base_dir, "accounts.dat")
                 self.logger.info(f"テンプレートからaccounts.datをコピーします: {template_accounts_dat} -> {dst_accounts_dat}")
                 shutil.copy2(template_accounts_dat, dst_accounts_dat)
                 self.logger.info("テンプレートのアカウントデータをコピーしました")
             else:
                 self.logger.info(f"テンプレートにaccounts.datが見つかりません: {template_accounts_dat}")
-                    
+            
             # MT5のインストールディレクトリからログイン情報をコピー
             config_files_to_copy = [
                 "connection_settings.ini",  # サーバー接続設定
@@ -1252,8 +1249,15 @@ StartupMode=2
             ]
             
             # データファイルをコピー
-            session_base_dir = os.path.dirname(target_dir)
+            # テンプレートからコピー済みのaccounts.datの有無を確認
+            has_accounts_dat = os.path.exists(os.path.join(session_base_dir, "accounts.dat"))
+            
             for file_name in account_files_to_copy:
+                # テンプレートからaccounts.datがコピー済みならスキップ
+                if file_name == "accounts.dat" and has_accounts_dat:
+                    self.logger.info(f"accounts.datはテンプレートからコピー済みのためスキップします")
+                    continue
+                    
                 src_path = os.path.join(self.mt5_install_dir, file_name)
                 if os.path.exists(src_path):
                     dst_path = os.path.join(session_base_dir, file_name)
@@ -1308,11 +1312,11 @@ NewsEnable=0
 AutoUpdate=0
 [Window]
 Maximized=0
-Width=1
-Height=1
-Left=-10000
-Top=-10000
-StartupMode=2
+Width=800
+Height=600
+Left=100
+Top=100
+StartupMode=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)
@@ -1331,11 +1335,11 @@ NewsEnable=0
 AutoUpdate=0
 [Window]
 Maximized=0
-Width=1
-Height=1
-Left=-10000
-Top=-10000
-StartupMode=2
+Width=800
+Height=600
+Left=100
+Top=100
+StartupMode=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)

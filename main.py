@@ -58,30 +58,36 @@ sys.stderr = safe_wrap_stream(sys.stderr)
 # プログラム終了時に実行
 atexit.register(reset_streams)
 
-# Configure logging first
-os.makedirs('logs', exist_ok=True)
-log_file = os.path.join('logs', 'server.log')
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-# Configure console handler with UTF-8 encoding
-try:
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(console_handler)
-except (ValueError, AttributeError):
-    pass
-
-# Configure file handler with UTF-8 encoding
-try:
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=10485760, backupCount=5, encoding='utf-8'
-    )
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+# ロガー設定の改善
+def configure_main_logger():
+    """メインロガー設定 - グローバルロガーを設定"""
+    logger = logging.getLogger("main")
+    
+    # 既存のハンドラがある場合は追加しない
+    if logger.handlers:
+        logger.debug(f"既存ハンドラ ({len(logger.handlers)}個) が存在するため新規ハンドラは追加しません")
+        return logger
+        
+    logger.setLevel(logging.DEBUG)
+    
+    # ログディレクトリ作成
+    os.makedirs('logs', exist_ok=True)
+    
+    # ファイルハンドラ
+    file_handler = logging.FileHandler(os.path.join('logs', 'server.log'), encoding='utf-8', mode='a')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-except (ValueError, AttributeError, PermissionError) as e:
-    print(f"ファイルログハンドラの設定エラー: {e}")
+    
+    # コンソールハンドラ
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+# グローバルロガー初期化
+logger = configure_main_logger()
 
 # メインアプリケーションのクリーンアップ関数
 def cleanup_app_resources():
@@ -131,56 +137,67 @@ def check_token(x_api_token: str | None):
         raise HTTPException(status_code=401, detail="Invalid token")
 
 @app.on_event("startup")
-async def _startup():
+async def startup_event():
+    """サーバー起動時の処理 - エラーハンドリング強化"""
     try:
-        logger.info("Server starting up...")
+        logger.info("サーバーを起動中...")
         
-        # Initialize session manager
+        # セッションマネージャー初期化
         try:
-            logger.info(f"Initializing session manager: {settings.sessions_base_path}, {settings.mt5_portable_path}")
-            init_session_manager(settings.sessions_base_path, settings.mt5_portable_path)
-            logger.info("Session manager initialized successfully")
+            app.state.session_manager = SessionManager()
+            logger.info("セッションマネージャーを初期化しました")
         except Exception as e:
-            logger.exception(f"Error initializing session manager: {e}")
-            raise RuntimeError(f"Failed to initialize session manager: {e}")
+            logger.error(f"セッションマネージャーの初期化に失敗しました: {e}", exc_info=True)
+            raise
         
-        # Set up periodic session cleanup
+        # 古いセッションのクリーンアップスケジューラーを設定
         try:
-            logger.info(f"Setting up cleanup scheduler: {settings.cleanup_interval} seconds interval")
-            scheduler = AsyncIOScheduler()
-            scheduler.add_job(
-                cleanup_old_sessions,
-                'interval', 
-                seconds=settings.cleanup_interval,
-                id='session_cleanup'
-            )
-            scheduler.start()
-            logger.info("Cleanup scheduler started successfully")
+            app.state.cleanup_task = asyncio.create_task(cleanup_old_sessions())
+            logger.info("クリーンアップスケジューラーを設定しました")
         except Exception as e:
-            logger.exception(f"Error setting up cleanup scheduler: {e}")
-            logger.warning("Continuing without cleanup scheduler")
-            # Continue without scheduler rather than failing startup
-        
-        logger.info("Server startup complete")
+            logger.error(f"クリーンアップスケジューラーの設定に失敗しました: {e}", exc_info=True)
+            raise
+            
+        logger.info("サーバーの起動が完了しました")
     except Exception as e:
-        logger.critical(f"Fatal error during startup: {e}")
-        logger.critical(f"Stack trace: {traceback.format_exc()}")
-        # Re-raise to fail startup
+        logger.critical(f"サーバー起動中に致命的なエラーが発生しました: {e}", exc_info=True)
         raise
 
 @app.on_event("shutdown")
-async def _shutdown():
-    logger.info("Server shutting down...")
-    
-    # Clean up all sessions
+async def shutdown_event():
+    """サーバーシャットダウン時の処理 - エラーハンドリング強化"""
     try:
-        session_manager = get_session_manager()
-        count = session_manager.close_all_sessions()
-        logger.info(f"Cleaned up {count} sessions")
+        logger.info("サーバーをシャットダウン中...")
+        
+        # クリーンアップタスクをキャンセル
+        if hasattr(app.state, 'cleanup_task') and app.state.cleanup_task:
+            try:
+                app.state.cleanup_task.cancel()
+                logger.info("クリーンアップタスクをキャンセルしました")
+            except Exception as e:
+                logger.error(f"クリーンアップタスクのキャンセルに失敗しました: {e}")
+        
+        # セッションマネージャーのクリーンアップ
+        if hasattr(app.state, 'session_manager'):
+            try:
+                await app.state.session_manager.cleanup()
+                logger.info("セッションマネージャーをクリーンアップしました")
+            except Exception as e:
+                logger.error(f"セッションマネージャーのクリーンアップに失敗しました: {e}")
+        
+        # ロガーハンドラのクリーンアップ
+        handlers = logger.handlers[:]
+        for handler in handlers:
+            try:
+                handler.close()
+                logger.removeHandler(handler)
+            except Exception as e:
+                # このエラーはログできないので標準出力に出力
+                print(f"ロガーハンドラのクリーンアップ中にエラーが発生しました: {e}")
+                
+        logger.info("サーバーのシャットダウンが完了しました")
     except Exception as e:
-        logger.error(f"Session cleanup error: {e}")
-    
-    logger.info("Server shutdown complete")
+        logger.error(f"サーバーシャットダウン中にエラーが発生しました: {e}", exc_info=True)
 
 async def cleanup_old_sessions():
     """Background task to clean up expired sessions"""
