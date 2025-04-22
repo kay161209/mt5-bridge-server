@@ -1389,6 +1389,29 @@ def init_session_manager(base_path: str, portable_mt5_path: str):
 
 def get_session_manager() -> SessionManager:
     """Get SessionManager instance"""
+    global _session_manager
+    
+    # FastAPIの状態からセッションマネージャーを取得を試みる
+    try:
+        from fastapi import FastAPI
+        import inspect
+        
+        # 実行中のスタックフレームを取得
+        stack = inspect.stack()
+        
+        # スタックを遡ってFastAPIインスタンスを探す
+        for frame in stack:
+            if 'app' in frame.frame.f_locals:
+                app_instance = frame.frame.f_locals['app']
+                if hasattr(app_instance, 'state') and hasattr(app_instance.state, 'session_manager'):
+                    logger.debug("FastAPIアプリの状態からSessionManagerを取得しました")
+                    return app_instance.state.session_manager
+    except Exception as e:
+        logger.warning(f"FastAPIアプリの状態からSessionManagerを取得できませんでした: {e}")
+    
+    # グローバルインスタンスを確認
     if _session_manager is None:
+        # グローバルインスタンスがなければエラー
         raise RuntimeError("SessionManager is not initialized")
+    
     return _session_manager 
