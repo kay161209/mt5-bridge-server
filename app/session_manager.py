@@ -239,132 +239,126 @@ def get_system_info() -> Dict[str, Any]:
     
     return info
 
-def check_gui_status(process_pid):
-    """MT5プロセスがGUIウィンドウを表示しているかを確認する"""
+def check_gui_status(pid: int) -> Dict[str, Any]:
+    """
+    MT5プロセスのGUIウィンドウのステータスを確認します
+    
+    Args:
+        pid: MT5プロセスのPID
+        
+    Returns:
+        GUIステータス情報を含む辞書
+    """
     result = {
-        'has_window': False,
-        'window_info': None,
-        'error': None,
-        'os': platform.system()
+        "gui_detected": False,
+        "platform": platform.system(),
+        "window_info": {},
+        "details": {}
     }
     
     try:
-        if platform.system() == 'Windows':
-            # Windowsの場合
-            import win32gui
-            import win32process
-            
-            def callback(hwnd, result):
-                try:
-                    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                    if pid == process_pid and win32gui.IsWindowVisible(hwnd):
-                        text = win32gui.GetWindowText(hwnd)
-                        if text and ('MetaTrader' in text or 'MT5' in text):
-                            rect = win32gui.GetWindowRect(hwnd)
-                            result['windows'].append({
-                                'handle': hwnd,
-                                'title': text,
-                                'rect': rect,
-                                'visible': win32gui.IsWindowVisible(hwnd),
-                                'enabled': win32gui.IsWindowEnabled(hwnd)
-                            })
-                            result['has_window'] = True
-                except Exception as e:
-                    result['errors'].append(str(e))
-                return True
-            
-            windows_result = {'windows': [], 'has_window': False, 'errors': []}
-            win32gui.EnumWindows(callback, windows_result)
-            result['has_window'] = windows_result['has_window']
-            result['window_info'] = windows_result['windows']
-            result['error'] = windows_result['errors'] if windows_result['errors'] else None
-            
-        elif platform.system() == 'Darwin':
-            # macOSの場合
-            try:
-                # AppleScriptを使用してウィンドウを確認
-                script = '''
-                tell application "System Events"
-                    set windowList to {}
-                    set allProcesses to processes whose unix id is %d
-                    repeat with proc in allProcesses
-                        set procName to name of proc
-                        set procWindows to windows of proc
-                        repeat with win in procWindows
-                            set winName to name of win
-                            set winPos to position of win
-                            set winSize to size of win
-                            set end of windowList to {name:procName, window:winName, position:winPos, size:winSize}
-                        end repeat
-                    end repeat
-                    return windowList
-                end tell
-                ''' % process_pid
-                
-                proc = subprocess.run(
-                    ["osascript", "-e", script],
-                    capture_output=True, text=True, timeout=3
-                )
-                
-                if proc.stdout.strip():
-                    result['has_window'] = True
-                    result['window_info'] = proc.stdout.strip()
-                
-                # Wineのウィンドウもチェック
-                wine_script = '''
-                tell application "System Events"
-                    set wineWindows to {}
-                    set wineProcs to processes whose name contains "wine"
-                    repeat with proc in wineProcs
-                        set procName to name of proc
-                        set procWindows to windows of proc
-                        repeat with win in procWindows
-                            set winName to name of win
-                            if winName contains "MetaTrader" or winName contains "MT5" then
-                                set winPos to position of win
-                                set winSize to size of win
-                                set end of wineWindows to {name:procName, window:winName, position:winPos, size:winSize}
-                            end if
-                        end repeat
-                    end repeat
-                    return wineWindows
-                end tell
-                '''
-                
-                wine_proc = subprocess.run(
-                    ["osascript", "-e", wine_script],
-                    capture_output=True, text=True, timeout=3
-                )
-                
-                if wine_proc.stdout.strip():
-                    result['has_wine_window'] = True
-                    result['wine_window_info'] = wine_proc.stdout.strip()
-                
-            except Exception as e:
-                result['error'] = str(e)
+        system = platform.system()
         
-        # プロセスの詳細情報も収集
+        # macOS
+        if system == 'Darwin':
+            try:
+                # アプリケーションのウィンドウを確認
+                cmd = [
+                    "osascript", 
+                    "-e", 
+                    f'tell application "System Events" to get name of windows of processes whose unix id is {pid}'
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                result["window_info"]["raw_output"] = proc.stdout.strip()
+                
+                if proc.stdout.strip() and "MetaTrader" in proc.stdout:
+                    result["gui_detected"] = True
+                    result["window_info"]["window_titles"] = proc.stdout.strip().split(", ")
+            except Exception as e:
+                result["details"]["osascript_error"] = str(e)
+        
+        # Windows
+        elif system == 'Windows':
+            try:
+                # PowerShellを使用してウィンドウを検索
+                cmd = [
+                    "powershell", 
+                    "-Command", 
+                    f"Get-Process -Id {pid} | Where-Object {{$_.MainWindowTitle}} | Select-Object -ExpandProperty MainWindowTitle"
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                result["window_info"]["raw_output"] = proc.stdout.strip()
+                
+                if proc.stdout.strip() and "MetaTrader" in proc.stdout:
+                    result["gui_detected"] = True
+                    result["window_info"]["window_titles"] = [proc.stdout.strip()]
+            except Exception as e:
+                result["details"]["powershell_error"] = str(e)
+        
+        # Linux
+        elif system == 'Linux':
+            try:
+                # xdotoolを使用
+                try:
+                    # xdotoolでプロセスIDに関連するウィンドウIDを取得
+                    cmd = ["xdotool", "search", "--pid", str(pid)]
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    window_ids = proc.stdout.strip().split('\n')
+                    result["window_info"]["window_ids"] = window_ids
+                    
+                    # ウィンドウタイトルを取得
+                    window_titles = []
+                    for wid in window_ids:
+                        if wid:
+                            title_cmd = ["xdotool", "getwindowname", wid]
+                            title_proc = subprocess.run(title_cmd, capture_output=True, text=True, timeout=1)
+                            title = title_proc.stdout.strip()
+                            window_titles.append(title)
+                            if "MetaTrader" in title:
+                                result["gui_detected"] = True
+                    
+                    result["window_info"]["window_titles"] = window_titles
+                except FileNotFoundError:
+                    result["details"]["xdotool_missing"] = True
+                    
+                    # 代替として、プロセスが X サーバーに接続されているか確認
+                    try:
+                        cmd = ["lsof", "-p", str(pid), "-a", "-d", "DEL"]
+                        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                        if "X11" in proc.stdout:
+                            result["details"]["x11_connections"] = True
+                            # X11接続があれば、GUIプロセスである可能性が高い
+                            result["gui_detected"] = True
+                    except (FileNotFoundError, subprocess.SubprocessError) as e:
+                        result["details"]["lsof_error"] = str(e)
+                except Exception as e:
+                    result["details"]["xdotool_error"] = str(e)
+            except Exception as e:
+                result["details"]["linux_detection_error"] = str(e)
+                
+        # プロセスの追加情報を取得
         try:
-            process = psutil.Process(process_pid)
-            result['process_info'] = {
-                'name': process.name(),
-                'status': process.status(),
-                'cpu_percent': process.cpu_percent(interval=0.1),
-                'memory_info': {
-                    'rss': process.memory_info().rss / (1024 * 1024),  # MB
-                    'vms': process.memory_info().vms / (1024 * 1024)   # MB
-                },
-                'create_time': datetime.fromtimestamp(process.create_time()).strftime('%Y-%m-%d %H:%M:%S'),
-                'cmdline': process.cmdline(),
-                'cwd': process.cwd(),
-                'num_threads': process.num_threads(),
-                'children': [{'pid': c.pid, 'name': c.name()} for c in process.children()]
-            }
+            p = psutil.Process(pid)
+            with p.oneshot():
+                result["process_info"] = {
+                    "name": p.name(),
+                    "exe": p.exe(),
+                    "cmdline": p.cmdline(),
+                    "cpu_percent": p.cpu_percent(interval=0.1),
+                    "memory_percent": p.memory_percent(),
+                    "status": p.status(),
+                    "num_threads": p.num_threads(),
+                    "connections": len(p.connections()),
+                    "open_files": len(p.open_files()),
+                    "children": len(p.children()),
+                    "nice": p.nice(),
+                    "io_counters": p.io_counters()._asdict() if hasattr(p, "io_counters") else None
+                }
         except Exception as e:
-            result['process_info_error'] = str(e)
+            result["process_info_error"] = str(e)
         
     except Exception as e:
-        result['error'] = str(e)
+        result["error"] = str(e)
     
     return result
 
@@ -499,100 +493,115 @@ StartupMode=2
             logger.exception(f"Error occurred while creating template directory: {e}")
             # Don't re-raise the exception to allow session creation to continue
     
-    def _run_mt5_process(self, session_dir: Path, port: int) -> bool:
-        """MT5プロセスを起動する"""
-        logger.info(f"MT5プロセスを起動しています（ディレクトリ: {session_dir}, ポート: {port}）")
+    def _run_mt5_process(self, session_dir: str, port: int) -> bool:
+        """
+        MT5プロセスを起動します
         
+        Args:
+            session_dir: セッションディレクトリ
+            port: 使用するポート番号
+            
+        Returns:
+            プロセスが正常に起動したかどうか
+        """
         try:
-            # 実行コマンドを構築
-            executable = os.path.join(session_dir, "terminal64.exe")
-            if not os.path.exists(executable):
-                logger.error(f"MT5実行ファイルが見つかりません: {executable}")
+            logger.info(f"MT5プロセスを起動します: session_dir={session_dir}, port={port}")
+            
+            # MT5コマンド
+            mt5_exe = os.path.join(session_dir, "terminal64.exe")
+            if not os.path.exists(mt5_exe):
+                logger.error(f"MT5実行ファイルが見つかりません: {mt5_exe}")
                 return False
-            
-            command = [executable, "/portable", f"/port:{port}"]
-            logger.debug(f"実行コマンド: {' '.join(command)}")
-            
+                
             # システム情報をログに記録
             sys_info = get_system_info()
-            logger.info(f"MT5起動前のシステム情報: {json.dumps(sys_info, ensure_ascii=False, indent=2)}")
+            logger.info(f"システム情報: {json.dumps(sys_info, indent=2, ensure_ascii=False)}")
             
-            # プロセスを起動
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=str(session_dir),
-                encoding='utf-8',
-                errors='replace'
-            )
+            # コマンド構築
+            cmd = [mt5_exe]
             
-            # プロセスIDをログに記録
-            pid = process.pid
-            logger.info(f"MT5プロセスが起動しました。PID: {pid}")
+            # OSに応じたコマンド調整
+            if platform.system() == 'Windows':
+                cmd_str = f"{mt5_exe}"
+                if port:
+                    cmd_str += f" /portable /port:{port}"
+                else:
+                    cmd_str += " /portable"
+                cmd = cmd_str
+            else:
+                if port:
+                    cmd += ["/portable", f"/port:{port}"]
+                else:
+                    cmd += ["/portable"]
             
-            # プロセスの状態確認を行う
-            time.sleep(2)  # プロセスが起動する時間を少し待つ
+            logger.info(f"MT5起動コマンド: {cmd}")
             
-            if process.poll() is not None:
-                # プロセスが既に終了している場合
-                return_code = process.poll()
-                stdout, stderr = process.communicate(timeout=1)
-                logger.error(f"MT5プロセスが即座に終了しました。リターンコード: {return_code}")
-                logger.error(f"標準出力: {stdout}")
-                logger.error(f"標準エラー: {stderr}")
-                return False
+            # プロセス起動
+            if isinstance(cmd, list):
+                proc = subprocess.Popen(
+                    cmd, 
+                    cwd=session_dir,
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    encoding='utf-8',
+                    bufsize=1
+                )
+            else:
+                proc = subprocess.Popen(
+                    cmd, 
+                    cwd=session_dir,
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    encoding='utf-8',
+                    bufsize=1,
+                    shell=True
+                )
             
-            # プロセス情報のモニタリング
+            pid = proc.pid
+            logger.info(f"MT5プロセスが起動しました (PID: {pid})")
+            
+            # プロセス状態のモニタリング
             try:
                 p = psutil.Process(pid)
-                logger.info(f"プロセス情報: 名前={p.name()}, 状態={p.status()}")
-                logger.info(f"メモリ使用量: {p.memory_info().rss / (1024 * 1024):.2f} MB")
-                logger.info(f"CPU使用率: {p.cpu_percent(interval=0.1):.2f}%")
                 
-                # 子プロセスの確認
-                children = p.children(recursive=True)
-                if children:
-                    logger.info(f"子プロセス数: {len(children)}")
-                    for child in children:
-                        logger.info(f"子プロセス: PID={child.pid}, 名前={child.name()}")
-                else:
-                    logger.info("子プロセスはありません")
+                # プロセスのメモリと CPU 使用率を記録
+                with p.oneshot():
+                    mem_info = p.memory_info()
+                    mem_mb = mem_info.rss / 1024 / 1024
+                    cpu_percent = p.cpu_percent(interval=0.5)
+                    logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
                 
-                # GUIウィンドウの状態を確認
+                # GUIの状態を確認
+                time.sleep(2)  # GUIが表示されるまで少し待機
                 gui_status = check_gui_status(pid)
-                logger.info(f"GUIウィンドウの状態: {json.dumps(gui_status, ensure_ascii=False, indent=2)}")
+                logger.info(f"MT5 GUIステータス: {json.dumps(gui_status, indent=2, ensure_ascii=False)}")
                 
-                # MT5のGUIが表示されない場合のログ
-                if not gui_status.get('has_window', False):
-                    logger.warning("MT5のGUIウィンドウが検出されませんでした")
-                    
-                    # 追加のデバッグ情報を収集
-                    # 環境変数をログに記録
-                    wine_env_vars = {k: v for k, v in os.environ.items() if 'wine' in k.lower() or 'display' in k.lower()}
-                    logger.debug(f"Wine関連の環境変数: {wine_env_vars}")
-                    
-                    # プロセスの標準出力/エラー出力を非ブロッキングで読み取り
-                    stdout_data, stderr_data = "", ""
-                    try:
-                        # 標準出力を確認
-                        if process.stdout:
-                            stdout_ready, _, _ = select.select([process.stdout], [], [], 0.5)
+                if not gui_status["gui_detected"]:
+                    logger.warning(f"MT5 GUIウィンドウが検出されませんでした。ヘッドレスモードで実行されている可能性があります。")
+                    # Wine関連のデバッグ情報をログに記録
+                    if platform.system() == 'Darwin' or platform.system() == 'Linux':
+                        wine_env_vars = {k: v for k, v in os.environ.items() if 'WINE' in k.upper()}
+                        logger.info(f"Wine環境変数: {json.dumps(wine_env_vars, indent=2, ensure_ascii=False)}")
+                        # プロセスの出力を記録
+                        stdout_data, stderr_data = "", ""
+                        try:
+                            # 標準出力と標準エラーを非ブロッキングで読み取る
+                            import select
+                            stdout_ready, _, _ = select.select([proc.stdout], [], [], 0.5)
                             if stdout_ready:
-                                stdout_data = process.stdout.read(4096)
-                                logger.debug(f"MT5プロセスの標準出力: {stdout_data}")
-                        
-                        # 標準エラーを確認
-                        if process.stderr:
-                            stderr_ready, _, _ = select.select([process.stderr], [], [], 0.5)
+                                stdout_data = proc.stdout.read(4096)
+                            stderr_ready, _, _ = select.select([proc.stderr], [], [], 0.5)
                             if stderr_ready:
-                                stderr_data = process.stderr.read(4096)
-                                logger.debug(f"MT5プロセスの標準エラー: {stderr_data}")
-                    except Exception as e:
-                        logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
+                                stderr_data = proc.stderr.read(4096)
+                        except Exception as e:
+                            logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
+                        
+                        logger.info(f"MT5プロセスの標準出力: {stdout_data}")
+                        logger.info(f"MT5プロセスの標準エラー: {stderr_data}")
                 
-                # プロセスクリーンアップ関数を登録
+                # プロセスのクリーンアップ関数
                 def cleanup_process():
                     try:
                         if p.is_running():
