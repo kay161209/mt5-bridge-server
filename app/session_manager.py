@@ -377,6 +377,8 @@ class SessionManager:
         self._next_port = 8000
         # ロガーを設定
         self.logger = logger
+        # セッション管理の設定
+        self.config = type('Config', (), {'clean_sessions': False})()
         
         # Template directory - a place to store a minimal MT5 configuration to copy from
         self.template_dir = os.path.join(base_path, "_template")
@@ -649,7 +651,8 @@ StartupMode=2
         """
         try:
             # まず初期化を実行
-            self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {self.session_id}）")
+            session_id = getattr(self, 'session_id', 'unknown')
+            self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {session_id}）")
             initialize_result = mt5.initialize(
                 path=self.mt5_exe_path,
                 login=login,
@@ -666,10 +669,10 @@ StartupMode=2
                 self.logger.error(detailed_error)
                 return False, detailed_error
             
-            self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {self.session_id}）")
+            self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {session_id}）")
             
             # ログイン処理
-            self.logger.info(f"MT5サーバーへのログインを開始します（セッション: {self.session_id}）")
+            self.logger.info(f"MT5サーバーへのログインを開始します（セッション: {session_id}）")
             account_info = mt5.account_info()
             if account_info is None:
                 error_code = mt5.last_error()
@@ -707,6 +710,7 @@ StartupMode=2
         """Create a new MT5 session with the given parameters"""
         # Generate a unique session ID
         session_id = str(uuid.uuid4().hex)
+        self.session_id = session_id  # インスタンス変数として保存
         self.logger.info(f"新しいセッションを作成しています。セッションID: {session_id}")
         
         # Prepare session directory
@@ -1012,6 +1016,89 @@ StartupMode=2
             # ディレクトリの削除に失敗してもセッション終了は成功とみなす
         
         return terminated
+
+    # 足りないメソッドの追加
+    def _copy_template_files(self, template_dir, target_dir):
+        """テンプレートディレクトリからファイルをコピーする"""
+        try:
+            self.logger.info(f"テンプレートファイルをコピーします: {template_dir} -> {target_dir}")
+            # MQL5ディレクトリをコピー
+            mql5_src = os.path.join(template_dir, "MQL5")
+            mql5_dst = os.path.join(os.path.dirname(target_dir))
+            
+            if os.path.exists(mql5_src):
+                self.logger.info(f"MQL5ディレクトリをコピーします: {mql5_src} -> {mql5_dst}")
+                if os.path.exists(mql5_dst):
+                    self.logger.info(f"既存のMQL5ディレクトリを削除します: {mql5_dst}")
+                    shutil.rmtree(mql5_dst)
+                shutil.copytree(mql5_src, mql5_dst)
+            
+            # その他の必要なファイルもコピー
+            for file_name in ["terminal64.exe", "portable.ini", "portable_mode"]:
+                src_path = os.path.join(template_dir, file_name)
+                if os.path.exists(src_path):
+                    dst_path = os.path.join(os.path.dirname(target_dir), file_name)
+                    self.logger.info(f"ファイルをコピーします: {src_path} -> {dst_path}")
+                    shutil.copy2(src_path, dst_path)
+        except Exception as e:
+            self.logger.error(f"テンプレートファイルのコピー中にエラーが発生しました: {e}")
+            self.logger.exception("詳細なエラー情報:")
+    
+    def _create_mt5_config(self, session_dir, login, password, server):
+        """MT5の設定ファイルを作成する"""
+        try:
+            self.logger.info(f"MT5設定ファイルを作成します: {session_dir}")
+            
+            # Configディレクトリを作成
+            config_dir = os.path.join(session_dir, "Config")
+            os.makedirs(config_dir, exist_ok=True)
+            
+            # terminal.iniファイルを作成
+            terminal_ini_path = os.path.join(config_dir, "terminal.ini")
+            terminal_ini_content = f"""[Common]
+Login={login}
+Server={server}
+ProxyEnable=0
+NewsEnable=0
+AutoUpdate=0
+[Window]
+Maximized=0
+Width=1
+Height=1
+Left=-10000
+Top=-10000
+StartupMode=2
+"""
+            with open(terminal_ini_path, "w") as f:
+                f.write(terminal_ini_content)
+            self.logger.info(f"terminal.iniファイルを作成しました: {terminal_ini_path}")
+            
+            # portable_modeファイルを作成
+            with open(os.path.join(session_dir, "portable_mode"), "w") as f:
+                f.write("portable")
+            
+        except Exception as e:
+            self.logger.error(f"MT5設定ファイルの作成中にエラーが発生しました: {e}")
+            self.logger.exception("詳細なエラー情報:")
+    
+    def _get_mt5_exec_path(self, session_id):
+        """セッション固有のMT5実行ファイルのパスを取得する"""
+        try:
+            # セッションディレクトリ内のMT5実行ファイルパス
+            session_dir = os.path.join(self.base_path, session_id)
+            mt5_exec_path = os.path.join(session_dir, "terminal64.exe")
+            
+            if not os.path.exists(mt5_exec_path):
+                # ファイルが存在しない場合は、元のMT5実行ファイルをコピー
+                self.logger.info(f"MT5実行ファイルをコピーします: {self.portable_mt5_path} -> {mt5_exec_path}")
+                shutil.copy2(self.portable_mt5_path, mt5_exec_path)
+            
+            return mt5_exec_path
+            
+        except Exception as e:
+            self.logger.error(f"MT5実行ファイルパスの取得中にエラーが発生しました: {e}")
+            self.logger.exception("詳細なエラー情報:")
+            return None
 
 # Global SessionManager instance
 _session_manager: Optional[SessionManager] = None

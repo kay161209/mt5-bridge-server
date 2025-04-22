@@ -32,15 +32,31 @@ def create_session(req: SessionCreateRequest, x_api_token: str | None = Header(N
     
     try:
         session_manager = get_session_manager()
-        session_id = session_manager.create_session(
+        result = session_manager.create_session(
             login=req.login,
             password=req.password,
             server=req.server
         )
-        return {
-            "session_id": session_id,
-            "success": True
-        }
+        
+        # 結果がdict型の場合（エラー情報も含む）
+        if isinstance(result, dict):
+            if result.get("success", False):
+                return {
+                    "session_id": result.get("session_id", ""),
+                    "success": True
+                }
+            else:
+                return {
+                    "session_id": result.get("session_id", ""),
+                    "success": False,
+                    "message": result.get("error", "不明なエラー")
+                }
+        # 文字列の場合（以前の実装との互換性のため）
+        else:
+            return {
+                "session_id": result,
+                "success": True
+            }
     except Exception as e:
         return {
             "session_id": "",
