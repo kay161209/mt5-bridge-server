@@ -521,11 +521,11 @@ StartupMode=2
             sys_info = get_system_info()
             self.logger.info(f"システム情報: {json.dumps(sys_info, indent=2, ensure_ascii=False)}")
             
-            # account.datファイルの存在確認
-            account_dat_path = os.path.join(session_dir, "account.dat")
-            has_account_data = os.path.exists(account_dat_path)
+            # accounts.datファイルの存在確認
+            accounts_dat_path = os.path.join(session_dir, "accounts.dat")
+            has_account_data = os.path.exists(accounts_dat_path)
             if has_account_data:
-                self.logger.info(f"アカウントデータファイルが見つかりました: {account_dat_path}")
+                self.logger.info(f"アカウントデータファイルが見つかりました: {accounts_dat_path}")
             else:
                 self.logger.info(f"アカウントデータファイルが見つかりません。ログイン情報が必要です。")
             
@@ -701,7 +701,7 @@ StartupMode=2
             connection_file = os.path.join(config_dir, "connection_settings.ini")
             accounts_file = os.path.join(config_dir, "accounts_settings.ini")
             login_file = os.path.join(config_dir, "login.ini")
-            account_dat_file = os.path.join(session_dir, "account.dat")
+            account_dat_file = os.path.join(session_dir, "accounts.dat")
             
             # ログイン情報ファイルと、アカウントデータファイルの存在確認
             has_login_files = (
@@ -1226,7 +1226,7 @@ StartupMode=2
             
             # MT5のルートディレクトリからアカウントデータファイルをコピー
             account_files_to_copy = [
-                "account.dat",       # アカウントデータファイル
+                "accounts.dat",       # アカウントデータファイル
                 "bases",             # データベースディレクトリ
                 "logs",              # ログディレクトリ
                 "cache",             # キャッシュディレクトリ
