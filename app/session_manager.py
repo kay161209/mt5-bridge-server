@@ -375,6 +375,8 @@ class SessionManager:
         self.base_path = base_path
         self.portable_mt5_path = portable_mt5_path
         self._next_port = 8000
+        # ロガーを設定
+        self.logger = logger
         
         # Template directory - a place to store a minimal MT5 configuration to copy from
         self.template_dir = os.path.join(base_path, "_template")
