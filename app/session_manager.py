@@ -509,36 +509,60 @@ StartupMode=2
             プロセスが正常に起動したかどうか
         """
         try:
-            logger.info(f"MT5プロセスを起動します: session_dir={session_dir}, port={port}")
+            self.logger.info(f"MT5プロセスを起動します: session_dir={session_dir}, port={port}")
             
             # MT5コマンド
             mt5_exe = os.path.join(session_dir, "terminal64.exe")
             if not os.path.exists(mt5_exe):
-                logger.error(f"MT5実行ファイルが見つかりません: {mt5_exe}")
+                self.logger.error(f"MT5実行ファイルが見つかりません: {mt5_exe}")
                 return False
                 
             # システム情報をログに記録
             sys_info = get_system_info()
-            logger.info(f"システム情報: {json.dumps(sys_info, indent=2, ensure_ascii=False)}")
+            self.logger.info(f"システム情報: {json.dumps(sys_info, indent=2, ensure_ascii=False)}")
             
-            # コマンド構築
-            cmd = [mt5_exe]
+            # account.datファイルの存在確認
+            account_dat_path = os.path.join(session_dir, "account.dat")
+            has_account_data = os.path.exists(account_dat_path)
+            if has_account_data:
+                self.logger.info(f"アカウントデータファイルが見つかりました: {account_dat_path}")
+            else:
+                self.logger.info(f"アカウントデータファイルが見つかりません。ログイン情報が必要です。")
+            
+            # コマンド構築（アカウントデータが存在する場合は自動ログイン）
+            cmd_options = []
             
             # OSに応じたコマンド調整
             if platform.system() == 'Windows':
-                cmd_str = f"{mt5_exe}"
+                cmd_str = f'"{mt5_exe}"'
+                
+                # 基本オプション
+                cmd_str += " /portable"
+                
+                # ポート指定があれば追加
                 if port:
-                    cmd_str += f" /portable /port:{port}"
-                else:
-                    cmd_str += " /portable"
+                    cmd_str += f" /port:{port}"
+                
+                # 必要なオプションを追加
+                cmd_str += " /skipupdate"  # 更新をスキップ
+                cmd_str += " /min"         # 最小化して起動
+                
                 cmd = cmd_str
             else:
+                cmd = [mt5_exe]
+                
+                # 基本オプション
+                cmd.append("/portable")
+                
+                # ポート指定があれば追加
                 if port:
-                    cmd += ["/portable", f"/port:{port}"]
-                else:
-                    cmd += ["/portable"]
+                    cmd.append(f"/port:{port}")
+                
+                # 必要なオプションを追加
+                cmd.append("/skipupdate")  # 更新をスキップ
+                cmd.append("/min")         # 最小化して起動
             
-            logger.info(f"MT5起動コマンド: {cmd}")
+            self.logger.info(f"MT5起動コマンド: {cmd}")
             
             # プロセス起動
             if isinstance(cmd, list):
@@ -552,6 +576,12 @@ StartupMode=2
                     bufsize=1
                 )
             else:
+                creation_flags = 0
+                if platform.system() == 'Windows':
+                    # GUIを完全に非表示にするための設定
+                    import subprocess
+                    creation_flags = subprocess.CREATE_NO_WINDOW
+                
                 proc = subprocess.Popen(
                     cmd, 
                     cwd=session_dir,
@@ -560,11 +590,12 @@ StartupMode=2
                     universal_newlines=True,
                     encoding='utf-8',
                     bufsize=1,
-                    shell=True
+                    shell=True,
+                    creationflags=creation_flags
                 )
             
             pid = proc.pid
-            logger.info(f"MT5プロセスが起動しました (PID: {pid})")
+            self.logger.info(f"MT5プロセスが起動しました (PID: {pid})")
             
             # プロセス状態のモニタリング
             try:
@@ -575,24 +606,23 @@ StartupMode=2
                     mem_info = p.memory_info()
                     mem_mb = mem_info.rss / 1024 / 1024
                     cpu_percent = p.cpu_percent(interval=0.5)
-                    logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
+                    self.logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
                 
                 # GUIの状態を確認
                 time.sleep(2)  # GUIが表示されるまで少し待機
                 gui_status = check_gui_status(pid)
-                logger.info(f"MT5 GUIステータス: {json.dumps(gui_status, indent=2, ensure_ascii=False)}")
+                self.logger.info(f"MT5 GUIステータス: {json.dumps(gui_status, indent=2, ensure_ascii=False)}")
                 
                 if not gui_status["gui_detected"]:
-                    logger.warning(f"MT5 GUIウィンドウが検出されませんでした。ヘッドレスモードで実行されている可能性があります。")
+                    self.logger.warning(f"MT5 GUIウィンドウが検出されませんでした。ヘッドレスモードで実行されている可能性があります。")
                     # Wine関連のデバッグ情報をログに記録
                     if platform.system() == 'Darwin' or platform.system() == 'Linux':
                         wine_env_vars = {k: v for k, v in os.environ.items() if 'WINE' in k.upper()}
-                        logger.info(f"Wine環境変数: {json.dumps(wine_env_vars, indent=2, ensure_ascii=False)}")
+                        self.logger.info(f"Wine環境変数: {json.dumps(wine_env_vars, indent=2, ensure_ascii=False)}")
                         # プロセスの出力を記録
                         stdout_data, stderr_data = "", ""
                         try:
                             # 標準出力と標準エラーを非ブロッキングで読み取る
-                            import select
                             stdout_ready, _, _ = select.select([proc.stdout], [], [], 0.5)
                             if stdout_ready:
                                 stdout_data = proc.stdout.read(4096)
@@ -600,37 +630,49 @@ StartupMode=2
                             if stderr_ready:
                                 stderr_data = proc.stderr.read(4096)
                         except Exception as e:
-                            logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
+                            self.logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
                         
-                        logger.info(f"MT5プロセスの標準出力: {stdout_data}")
-                        logger.info(f"MT5プロセスの標準エラー: {stderr_data}")
+                        self.logger.info(f"MT5プロセスの標準出力: {stdout_data}")
+                        self.logger.info(f"MT5プロセスの標準エラー: {stderr_data}")
+                
+                # セッション情報を更新
+                self._current_process = proc
                 
                 # プロセスのクリーンアップ関数
                 def cleanup_process():
                     try:
                         if p.is_running():
-                            logger.info(f"MT5プロセス(PID: {pid})を終了します")
+                            self.logger.info(f"MT5プロセス(PID: {pid})を終了します")
                             p.terminate()
                             try:
                                 p.wait(timeout=5)
                             except psutil.TimeoutExpired:
-                                logger.warning(f"MT5プロセス(PID: {pid})が5秒以内に終了しませんでした。強制終了します")
+                                self.logger.warning(f"MT5プロセス(PID: {pid})が5秒以内に終了しませんでした。強制終了します")
                                 p.kill()
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-                        logger.warning(f"プロセスクリーンアップ中にエラーが発生しました: {e}")
+                        self.logger.warning(f"プロセスクリーンアップ中にエラーが発生しました: {e}")
                 
                 # アプリケーション終了時にプロセスをクリーンアップ
                 atexit.register(cleanup_process)
                 
             except psutil.NoSuchProcess:
-                logger.error(f"プロセス(PID: {pid})が見つかりません")
+                self.logger.error(f"プロセス(PID: {pid})が見つかりません")
+                return False
             except Exception as e:
-                logger.error(f"プロセス情報の取得中にエラーが発生しました: {e}")
+                self.logger.error(f"プロセス情報の取得中にエラーが発生しました: {e}")
+                return False
             
+            # プロセスを少し待機して状態を確認
+            time.sleep(3)
+            if proc.poll() is not None:
+                self.logger.error(f"MT5プロセスが早期に終了しました。終了コード: {proc.poll()}")
+                return False
+                
+            self.logger.info(f"MT5プロセスが正常に起動しています")
             return True
             
         except Exception as e:
-            logger.error(f"MT5プロセスの起動中にエラーが発生しました: {str(e)}")
+            self.logger.error(f"MT5プロセスの起動中にエラーが発生しました: {str(e)}")
             traceback.print_exc()
             return False
     
@@ -654,17 +696,21 @@ StartupMode=2
             session_id = getattr(self, 'session_id', 'unknown')
             session_dir = os.path.join(self.base_path, session_id)
             
-            # ログイン情報ファイルが存在するか確認
+            # ログイン情報ファイルやアカウントデータの存在確認
             config_dir = os.path.join(session_dir, "Config")
             connection_file = os.path.join(config_dir, "connection_settings.ini")
             accounts_file = os.path.join(config_dir, "accounts_settings.ini")
             login_file = os.path.join(config_dir, "login.ini")
+            account_dat_file = os.path.join(session_dir, "account.dat")
             
+            # ログイン情報ファイルと、アカウントデータファイルの存在確認
             has_login_files = (
                 os.path.exists(connection_file) and 
                 os.path.exists(accounts_file) and
                 os.path.exists(login_file)
             )
+            
+            has_account_data = os.path.exists(account_dat_file)
             
             self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {session_id}）")
             
@@ -675,8 +721,30 @@ StartupMode=2
             self.logger.info(f"  - サーバー: {server}")
             self.logger.info(f"  - タイムアウト: {timeout}秒")
             self.logger.info(f"  - ログインファイル存在: {has_login_files}")
+            self.logger.info(f"  - アカウントデータ存在: {has_account_data}")
             
-            if has_login_files:
+            # データ存在状況に基づく初期化方法の決定
+            if has_account_data:
+                # アカウントデータファイルが存在する場合、基本初期化のみ行う
+                self.logger.info("アカウントデータファイルが存在するため、基本初期化のみ行います")
+                initialize_result = mt5.initialize(
+                    path=self.mt5_exe_path,
+                    portable=True,
+                    timeout=timeout * 1000
+                )
+                
+                # 初期化に失敗した場合
+                if not initialize_result:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5の初期化に失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    return False, detailed_error
+                
+                self.logger.info(f"アカウントデータを使用した基本初期化に成功しました")
+                # ログインステップをスキップ
+                
+            elif has_login_files:
                 # ログイン情報ファイルが存在する場合、まずポータブルモードで初期化のみ行う
                 self.logger.info("既存のログイン情報ファイルを使用して初期化します")
                 
@@ -763,6 +831,19 @@ StartupMode=2
                     f"取引許可={terminal_info.trade_allowed}, "
                     f"メール有効={terminal_info.email_enabled}"
                 )
+                
+                # 追加のシンボル情報確認
+                try:
+                    symbols_total = mt5.symbols_total()
+                    self.logger.info(f"利用可能なシンボル数: {symbols_total}")
+                    
+                    if symbols_total > 0 and symbols_total < 100:  # シンボル数が適切な範囲の場合
+                        symbols = mt5.symbols_get()[:5]  # 最初の5つだけ取得
+                        symbol_names = [symbol.name for symbol in symbols]
+                        self.logger.info(f"取得可能なシンボル例: {', '.join(symbol_names)}")
+                except Exception as e:
+                    self.logger.warning(f"シンボル情報取得中にエラーが発生しました: {e}")
+                
             except Exception as e:
                 self.logger.warning(f"ターミナル情報の取得中にエラーが発生しました: {e}")
             
@@ -1142,6 +1223,43 @@ StartupMode=2
                     shutil.copy2(src_path, dst_path)
                 else:
                     self.logger.info(f"ログイン情報ファイルが見つかりません: {src_path}")
+            
+            # MT5のルートディレクトリからアカウントデータファイルをコピー
+            account_files_to_copy = [
+                "account.dat",       # アカウントデータファイル
+                "bases",             # データベースディレクトリ
+                "logs",              # ログディレクトリ
+                "cache",             # キャッシュディレクトリ
+                "tester",            # テスターディレクトリ
+                "profiles.dat",      # プロファイルデータ
+                "symbols.dat",       # シンボルデータ
+                "symbols.sel",       # 選択したシンボル
+                "experts.dat",       # EAデータ
+                "watchlist.dat",     # ウォッチリスト
+                "metatester.ini",    # テスター設定
+                "metaeditor.ini"     # エディタ設定
+            ]
+            
+            # データファイルをコピー
+            session_base_dir = os.path.dirname(target_dir)
+            for file_name in account_files_to_copy:
+                src_path = os.path.join(self.mt5_install_dir, file_name)
+                if os.path.exists(src_path):
+                    dst_path = os.path.join(session_base_dir, file_name)
+                    
+                    if os.path.isdir(src_path):
+                        # ディレクトリの場合
+                        if os.path.exists(dst_path):
+                            self.logger.info(f"既存のディレクトリを削除します: {dst_path}")
+                            shutil.rmtree(dst_path)
+                        self.logger.info(f"データディレクトリをコピーします: {src_path} -> {dst_path}")
+                        shutil.copytree(src_path, dst_path)
+                    else:
+                        # ファイルの場合
+                        self.logger.info(f"データファイルをコピーします: {src_path} -> {dst_path}")
+                        shutil.copy2(src_path, dst_path)
+                else:
+                    self.logger.info(f"データファイルが見つかりません (問題ありません): {src_path}")
                     
         except Exception as e:
             self.logger.error(f"テンプレートファイルのコピー中にエラーが発生しました: {e}")
