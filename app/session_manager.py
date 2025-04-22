@@ -650,33 +650,95 @@ StartupMode=2
             (成功したかどうか, エラーメッセージ)
         """
         try:
-            # まず初期化を実行
+            # セッションIDを安全に取得
             session_id = getattr(self, 'session_id', 'unknown')
-            self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {session_id}）")
-            initialize_result = mt5.initialize(
-                path=self.mt5_exe_path,
-                login=login,
-                password=password,
-                server=server,
-                timeout=timeout * 1000
+            session_dir = os.path.join(self.base_path, session_id)
+            
+            # ログイン情報ファイルが存在するか確認
+            config_dir = os.path.join(session_dir, "Config")
+            connection_file = os.path.join(config_dir, "connection_settings.ini")
+            accounts_file = os.path.join(config_dir, "accounts_settings.ini")
+            login_file = os.path.join(config_dir, "login.ini")
+            
+            has_login_files = (
+                os.path.exists(connection_file) and 
+                os.path.exists(accounts_file) and
+                os.path.exists(login_file)
             )
             
-            # 初期化に失敗した場合
-            if not initialize_result:
-                error_code = mt5.last_error()
-                error_msg = f"MT5の初期化に失敗しました。"
-                detailed_error = get_detailed_error(error_code, error_msg)
-                self.logger.error(detailed_error)
-                return False, detailed_error
+            self.logger.info(f"MT5ライブラリの初期化を開始します（セッション: {session_id}）")
+            
+            # MT5初期化パラメータを記録
+            self.logger.info(f"初期化パラメータ:")
+            self.logger.info(f"  - MT5パス: {self.mt5_exe_path}")
+            self.logger.info(f"  - ログイン: {login}")
+            self.logger.info(f"  - サーバー: {server}")
+            self.logger.info(f"  - タイムアウト: {timeout}秒")
+            self.logger.info(f"  - ログインファイル存在: {has_login_files}")
+            
+            if has_login_files:
+                # ログイン情報ファイルが存在する場合、まずポータブルモードで初期化のみ行う
+                self.logger.info("既存のログイン情報ファイルを使用して初期化します")
+                
+                # 2段階初期化: パスとポータブルモードのみ指定
+                initialize_result = mt5.initialize(
+                    path=self.mt5_exe_path,
+                    portable=True,
+                    timeout=timeout * 1000
+                )
+                
+                # 初期化に失敗した場合
+                if not initialize_result:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5の初期化に失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    return False, detailed_error
+                
+                self.logger.info(f"基本初期化に成功しました。ログインを試行します...")
+                
+                # ログイン試行
+                login_success = mt5.login(
+                    login=login,
+                    password=password, 
+                    server=server
+                )
+                
+                if not login_success:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5サーバーへのログインに失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    # 失敗した場合はMT5を終了して資源を解放
+                    mt5.shutdown()
+                    return False, detailed_error
+            else:
+                # ログイン情報ファイルがない場合は、従来の方法で一度に初期化とログイン
+                self.logger.info("ログイン情報をパラメータで指定して初期化します")
+                
+                initialize_result = mt5.initialize(
+                    path=self.mt5_exe_path,
+                    login=login,
+                    password=password,
+                    server=server,
+                    timeout=timeout * 1000
+                )
+                
+                # 初期化に失敗した場合
+                if not initialize_result:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5の初期化に失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    return False, detailed_error
             
             self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {session_id}）")
             
-            # ログイン処理
-            self.logger.info(f"MT5サーバーへのログインを開始します（セッション: {session_id}）")
+            # アカウント情報を取得して検証
             account_info = mt5.account_info()
             if account_info is None:
                 error_code = mt5.last_error()
-                error_msg = f"MT5サーバーへのログインに失敗しました。"
+                error_msg = f"MT5アカウント情報の取得に失敗しました。"
                 detailed_error = get_detailed_error(error_code, error_msg)
                 self.logger.error(detailed_error)
                 # 失敗した場合はMT5を終了して資源を解放
@@ -691,6 +753,18 @@ StartupMode=2
                 f"残高={account_info.balance}, "
                 f"証拠金レベル={account_info.margin_level}%"
             )
+            
+            # ターミナル情報も確認
+            try:
+                terminal_info = mt5.terminal_info()
+                self.logger.info(
+                    f"ターミナル情報: "
+                    f"接続状態={terminal_info.connected}, "
+                    f"取引許可={terminal_info.trade_allowed}, "
+                    f"メール有効={terminal_info.email_enabled}"
+                )
+            except Exception as e:
+                self.logger.warning(f"ターミナル情報の取得中にエラーが発生しました: {e}")
             
             return True, ""
             
@@ -1040,6 +1114,35 @@ StartupMode=2
                     dst_path = os.path.join(os.path.dirname(target_dir), file_name)
                     self.logger.info(f"ファイルをコピーします: {src_path} -> {dst_path}")
                     shutil.copy2(src_path, dst_path)
+                    
+            # MT5のインストールディレクトリからログイン情報をコピー
+            config_files_to_copy = [
+                "connection_settings.ini",  # サーバー接続設定
+                "accounts_settings.ini",    # アカウント設定
+                "last_profile.ini",         # 最後に使用したプロファイル
+                "startup.ini",              # 起動時設定
+                "login.ini",                # ログイン情報
+                "mt5.ini"                   # MT5全般設定
+            ]
+            
+            # インストールディレクトリのConfigフォルダパス
+            src_config_dir = os.path.join(self.mt5_install_dir, "Config")
+            # ターゲットディレクトリのConfigフォルダパス
+            target_config_dir = os.path.join(os.path.dirname(target_dir), "Config")
+            
+            # Configディレクトリがない場合は作成
+            os.makedirs(target_config_dir, exist_ok=True)
+            
+            # ログイン関連ファイルをコピー
+            for file_name in config_files_to_copy:
+                src_path = os.path.join(src_config_dir, file_name)
+                if os.path.exists(src_path):
+                    dst_path = os.path.join(target_config_dir, file_name)
+                    self.logger.info(f"ログイン情報ファイルをコピーします: {src_path} -> {dst_path}")
+                    shutil.copy2(src_path, dst_path)
+                else:
+                    self.logger.info(f"ログイン情報ファイルが見つかりません: {src_path}")
+                    
         except Exception as e:
             self.logger.error(f"テンプレートファイルのコピー中にエラーが発生しました: {e}")
             self.logger.exception("詳細なエラー情報:")
@@ -1053,9 +1156,45 @@ StartupMode=2
             config_dir = os.path.join(session_dir, "Config")
             os.makedirs(config_dir, exist_ok=True)
             
-            # terminal.iniファイルを作成
-            terminal_ini_path = os.path.join(config_dir, "terminal.ini")
-            terminal_ini_content = f"""[Common]
+            # ログイン情報ファイルがあるか確認
+            connection_file = os.path.join(config_dir, "connection_settings.ini")
+            accounts_file = os.path.join(config_dir, "accounts_settings.ini")
+            login_file = os.path.join(config_dir, "login.ini")
+            
+            # ログイン情報ファイルが揃っているかチェック
+            has_login_files = (
+                os.path.exists(connection_file) and 
+                os.path.exists(accounts_file) and
+                os.path.exists(login_file)
+            )
+            
+            if has_login_files:
+                self.logger.info(f"既存のログイン情報ファイルが見つかりました。terminal.iniファイルのみ更新します。")
+                
+                # terminal.iniファイルの作成（GUI設定のみ）
+                terminal_ini_path = os.path.join(config_dir, "terminal.ini")
+                terminal_ini_content = """[Common]
+ProxyEnable=0
+NewsEnable=0
+AutoUpdate=0
+[Window]
+Maximized=0
+Width=1
+Height=1
+Left=-10000
+Top=-10000
+StartupMode=2
+"""
+                with open(terminal_ini_path, "w") as f:
+                    f.write(terminal_ini_content)
+                self.logger.info(f"terminal.iniファイルを作成しました（GUI設定のみ）: {terminal_ini_path}")
+            else:
+                # コピーされたログイン情報ファイルがない場合は、新規に作成
+                self.logger.info(f"ログイン情報ファイルが見つからないため、新しく作成します。")
+                
+                # terminal.iniファイルを作成（ログイン情報も含む）
+                terminal_ini_path = os.path.join(config_dir, "terminal.ini")
+                terminal_ini_content = f"""[Common]
 Login={login}
 Server={server}
 ProxyEnable=0
@@ -1069,11 +1208,18 @@ Left=-10000
 Top=-10000
 StartupMode=2
 """
-            with open(terminal_ini_path, "w") as f:
-                f.write(terminal_ini_content)
-            self.logger.info(f"terminal.iniファイルを作成しました: {terminal_ini_path}")
+                with open(terminal_ini_path, "w") as f:
+                    f.write(terminal_ini_content)
+                self.logger.info(f"terminal.iniファイルを作成しました（ログイン情報込み）: {terminal_ini_path}")
+                
+                # 簡単なログイン情報ファイルも作成
+                with open(connection_file, "w") as f:
+                    f.write(f"[connection]\nserver={server}\n")
+                
+                with open(login_file, "w") as f:
+                    f.write(f"[login]\nlogin={login}\n")
             
-            # portable_modeファイルを作成
+            # portable_modeファイルを作成（常に作成）
             with open(os.path.join(session_dir, "portable_mode"), "w") as f:
                 f.write("portable")
             
