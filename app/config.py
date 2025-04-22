@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     # セッション管理関連
     mt5_portable_path: str = os.getenv("MT5_PORTABLE_PATH", r"C:\MetaTrader5-Portable\terminal64.exe")
     sessions_base_path: str = os.getenv("SESSIONS_BASE_PATH", r"C:\mt5-sessions")
+    test_sessions_base_path: str = os.getenv("TEST_SESSIONS_BASE_PATH", r"C:\mt5-sessions-test")
     session_inactive_timeout: int = int(os.getenv("SESSION_INACTIVE_TIMEOUT", "3600"))  # 1時間
     cleanup_interval: int = int(os.getenv("CLEANUP_INTERVAL", "300"))  # 5分ごとにクリーンアップ
 
