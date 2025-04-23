@@ -726,6 +726,20 @@ StartupMode=0
             session_id = getattr(self, 'session_id', 'unknown')
             session_dir = os.path.join(self.base_path, session_id)
             
+            # プロセスが起動しているか確認
+            # MT5を初期化する前に、プロセスが存在していることを確認
+            if not os.path.exists(session_dir):
+                error_msg = f"セッションディレクトリが存在しません: {session_dir}"
+                self.logger.error(error_msg)
+                return False, error_msg
+            
+            # MT5実行ファイルパスの確認
+            mt5_exe_path = os.path.join(session_dir, "terminal64.exe")
+            if not os.path.exists(mt5_exe_path):
+                error_msg = f"MT5実行ファイルが見つかりません: {mt5_exe_path}"
+                self.logger.error(error_msg)
+                return False, error_msg
+            
             # ログイン情報ファイルやアカウントデータの存在確認
             config_dir = os.path.join(session_dir, "Config")
             connection_file = os.path.join(config_dir, "connection_settings.ini")
@@ -746,139 +760,207 @@ StartupMode=0
             
             # MT5初期化パラメータを記録
             self.logger.info(f"初期化パラメータ:")
-            self.logger.info(f"  - MT5パス: {self.mt5_exe_path}")
+            self.logger.info(f"  - MT5パス: {mt5_exe_path}")
             self.logger.info(f"  - ログイン: {login}")
             self.logger.info(f"  - サーバー: {server}")
             self.logger.info(f"  - タイムアウト: {timeout}秒")
             self.logger.info(f"  - ログインファイル存在: {has_login_files}")
             self.logger.info(f"  - アカウントデータ存在: {has_account_data}")
             
-            # データ存在状況に基づく初期化方法の決定
-            if has_account_data:
-                # アカウントデータファイルが存在する場合、基本初期化のみ行う
-                self.logger.info("アカウントデータファイルが存在するため、基本初期化のみ行います")
-                initialize_result = mt5.initialize(
-                    path=self.mt5_exe_path,
-                    portable=True,
-                    timeout=timeout * 1000
-                )
-                
-                # 初期化に失敗した場合
-                if not initialize_result:
-                    error_code = mt5.last_error()
-                    error_msg = f"MT5の初期化に失敗しました。"
-                    detailed_error = get_detailed_error(error_code, error_msg)
-                    self.logger.error(detailed_error)
-                    return False, detailed_error
-                
-                self.logger.info(f"アカウントデータを使用した基本初期化に成功しました")
-                # ログインステップをスキップ
-                
-            elif has_login_files:
-                # ログイン情報ファイルが存在する場合、まずポータブルモードで初期化のみ行う
-                self.logger.info("既存のログイン情報ファイルを使用して初期化します")
-                
-                # 2段階初期化: パスとポータブルモードのみ指定
-                initialize_result = mt5.initialize(
-                    path=self.mt5_exe_path,
-                    portable=True,
-                    timeout=timeout * 1000
-                )
-                
-                # 初期化に失敗した場合
-                if not initialize_result:
-                    error_code = mt5.last_error()
-                    error_msg = f"MT5の初期化に失敗しました。"
-                    detailed_error = get_detailed_error(error_code, error_msg)
-                    self.logger.error(detailed_error)
-                    return False, detailed_error
-                
-                self.logger.info(f"基本初期化に成功しました。ログインを試行します...")
-                
-                # ログイン試行
-                login_success = mt5.login(
-                    login=login,
-                    password=password, 
-                    server=server
-                )
-                
-                if not login_success:
-                    error_code = mt5.last_error()
-                    error_msg = f"MT5サーバーへのログインに失敗しました。"
-                    detailed_error = get_detailed_error(error_code, error_msg)
-                    self.logger.error(detailed_error)
-                    # 失敗した場合はMT5を終了して資源を解放
-                    mt5.shutdown()
-                    return False, detailed_error
-            else:
-                # ログイン情報ファイルがない場合は、従来の方法で一度に初期化とログイン
-                self.logger.info("ログイン情報をパラメータで指定して初期化します")
-                
-                initialize_result = mt5.initialize(
-                    path=self.mt5_exe_path,
-                    login=login,
-                    password=password,
-                    server=server,
-                    timeout=timeout * 1000
-                )
-                
-                # 初期化に失敗した場合
-                if not initialize_result:
-                    error_code = mt5.last_error()
-                    error_msg = f"MT5の初期化に失敗しました。"
-                    detailed_error = get_detailed_error(error_code, error_msg)
-                    self.logger.error(detailed_error)
-                    return False, detailed_error
-            
-            self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {session_id}）")
-            
-            # アカウント情報を取得して検証
-            account_info = mt5.account_info()
-            if account_info is None:
-                error_code = mt5.last_error()
-                error_msg = f"MT5アカウント情報の取得に失敗しました。"
-                detailed_error = get_detailed_error(error_code, error_msg)
-                self.logger.error(detailed_error)
-                # 失敗した場合はMT5を終了して資源を解放
-                mt5.shutdown()
-                return False, detailed_error
-            
-            # ログイン情報のログ出力
-            self.logger.info(
-                f"MT5サーバーへのログインに成功しました: "
-                f"アカウント名={account_info.name}, "
-                f"サーバー={account_info.server}, "
-                f"残高={account_info.balance}, "
-                f"証拠金レベル={account_info.margin_level}%"
-            )
-            
-            # ターミナル情報も確認
+            # MT5が既に初期化されている場合はシャットダウン
             try:
-                terminal_info = mt5.terminal_info()
-                self.logger.info(
-                    f"ターミナル情報: "
-                    f"接続状態={terminal_info.connected}, "
-                    f"取引許可={terminal_info.trade_allowed}, "
-                    f"メール有効={terminal_info.email_enabled}"
-                )
+                if mt5.terminal_info() is not None:
+                    self.logger.info("MT5は既に初期化されています。再初期化のためシャットダウンします。")
+                    mt5.shutdown()
+                    time.sleep(2)  # シャットダウン後の安定化待機
+            except:
+                pass
+            
+            # MT5プロセスに接続するための待機とリトライ
+            max_retries = 3
+            retry_interval = 5  # 秒
+            success = False
+            error_message = ""
+            
+            for attempt in range(1, max_retries + 1):
+                self.logger.info(f"MT5の初期化を試行しています（{attempt}/{max_retries}）...")
                 
-                # 追加のシンボル情報確認
-                try:
-                    symbols_total = mt5.symbols_total()
-                    self.logger.info(f"利用可能なシンボル数: {symbols_total}")
+                # アカウントデータ存在状況に基づく初期化方法の決定
+                if has_account_data:
+                    # アカウントデータファイルが存在する場合、基本初期化のみ行う
+                    self.logger.info("アカウントデータファイルが存在するため、基本初期化のみ行います")
+                    try:
+                        # 短いタイムアウトで接続試行
+                        initialize_result = mt5.initialize(
+                            path=mt5_exe_path,
+                            portable=True,
+                            timeout=min(10000, timeout * 1000)  # より短いタイムアウトで試行
+                        )
+                        
+                        # 初期化に失敗した場合
+                        if not initialize_result:
+                            error_code = mt5.last_error()
+                            error_msg = f"MT5の初期化に失敗しました。"
+                            detailed_error = get_detailed_error(error_code, error_msg)
+                            self.logger.error(detailed_error)
+                            error_message = detailed_error
+                            
+                            # リトライ前に少し待機
+                            time.sleep(retry_interval)
+                            continue
+                        
+                        self.logger.info(f"アカウントデータを使用した基本初期化に成功しました")
+                        success = True
+                        break
+                        
+                    except Exception as e:
+                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
+                        self.logger.error(error_message)
+                        time.sleep(retry_interval)
+                        continue
                     
-                    if symbols_total > 0 and symbols_total < 100:  # シンボル数が適切な範囲の場合
-                        symbols = mt5.symbols_get()[:5]  # 最初の5つだけ取得
-                        symbol_names = [symbol.name for symbol in symbols]
-                        self.logger.info(f"取得可能なシンボル例: {', '.join(symbol_names)}")
-                except Exception as e:
-                    self.logger.warning(f"シンボル情報取得中にエラーが発生しました: {e}")
+                elif has_login_files:
+                    # ログイン情報ファイルが存在する場合、まずポータブルモードで初期化のみ行う
+                    self.logger.info("既存のログイン情報ファイルを使用して初期化します")
+                    
+                    try:
+                        # 2段階初期化: パスとポータブルモードのみ指定
+                        initialize_result = mt5.initialize(
+                            path=mt5_exe_path,
+                            portable=True,
+                            timeout=min(10000, timeout * 1000)
+                        )
+                        
+                        # 初期化に失敗した場合
+                        if not initialize_result:
+                            error_code = mt5.last_error()
+                            error_msg = f"MT5の初期化に失敗しました。"
+                            detailed_error = get_detailed_error(error_code, error_msg)
+                            self.logger.error(detailed_error)
+                            error_message = detailed_error
+                            
+                            # リトライ前に少し待機
+                            time.sleep(retry_interval)
+                            continue
+                        
+                        self.logger.info(f"基本初期化に成功しました。ログインを試行します...")
+                        
+                        # ログイン試行
+                        login_success = mt5.login(
+                            login=login,
+                            password=password, 
+                            server=server
+                        )
+                        
+                        if not login_success:
+                            error_code = mt5.last_error()
+                            error_msg = f"MT5サーバーへのログインに失敗しました。"
+                            detailed_error = get_detailed_error(error_code, error_msg)
+                            self.logger.error(detailed_error)
+                            error_message = detailed_error
+                            
+                            # 失敗した場合はMT5を終了して資源を解放
+                            mt5.shutdown()
+                            time.sleep(retry_interval)
+                            continue
+                        
+                        success = True
+                        break
+                    except Exception as e:
+                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
+                        self.logger.error(error_message)
+                        time.sleep(retry_interval)
+                        continue
+                else:
+                    # ログイン情報ファイルがない場合は、従来の方法で一度に初期化とログイン
+                    self.logger.info("ログイン情報をパラメータで指定して初期化します")
+                    
+                    try:
+                        initialize_result = mt5.initialize(
+                            path=mt5_exe_path,
+                            login=login,
+                            password=password,
+                            server=server,
+                            timeout=min(15000, timeout * 1000)
+                        )
+                        
+                        # 初期化に失敗した場合
+                        if not initialize_result:
+                            error_code = mt5.last_error()
+                            error_msg = f"MT5の初期化に失敗しました。"
+                            detailed_error = get_detailed_error(error_code, error_msg)
+                            self.logger.error(detailed_error)
+                            error_message = detailed_error
+                            
+                            # リトライ前に少し待機
+                            time.sleep(retry_interval)
+                            continue
+                        
+                        success = True
+                        break
+                    except Exception as e:
+                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
+                        self.logger.error(error_message)
+                        time.sleep(retry_interval)
+                        continue
+            
+            # 最終的な結果確認
+            if success:
+                self.logger.info(f"MT5ライブラリの初期化に成功しました（セッション: {session_id}）")
                 
-            except Exception as e:
-                self.logger.warning(f"ターミナル情報の取得中にエラーが発生しました: {e}")
-            
-            return True, ""
-            
+                # アカウント情報を取得して検証
+                try:
+                    account_info = mt5.account_info()
+                    if account_info is None:
+                        error_code = mt5.last_error()
+                        error_msg = f"MT5アカウント情報の取得に失敗しました。"
+                        detailed_error = get_detailed_error(error_code, error_msg)
+                        self.logger.error(detailed_error)
+                        # 失敗した場合はMT5を終了して資源を解放
+                        mt5.shutdown()
+                        return False, detailed_error
+                    
+                    # ログイン情報のログ出力
+                    self.logger.info(
+                        f"MT5サーバーへのログインに成功しました: "
+                        f"アカウント名={account_info.name}, "
+                        f"サーバー={account_info.server}, "
+                        f"残高={account_info.balance}, "
+                        f"証拠金レベル={account_info.margin_level}%"
+                    )
+                    
+                    # ターミナル情報も確認
+                    try:
+                        terminal_info = mt5.terminal_info()
+                        self.logger.info(
+                            f"ターミナル情報: "
+                            f"接続状態={terminal_info.connected}, "
+                            f"取引許可={terminal_info.trade_allowed}, "
+                            f"メール有効={terminal_info.email_enabled}"
+                        )
+                        
+                        # 追加のシンボル情報確認
+                        try:
+                            symbols_total = mt5.symbols_total()
+                            self.logger.info(f"利用可能なシンボル数: {symbols_total}")
+                            
+                            if symbols_total > 0 and symbols_total < 100:  # シンボル数が適切な範囲の場合
+                                symbols = mt5.symbols_get()[:5]  # 最初の5つだけ取得
+                                symbol_names = [symbol.name for symbol in symbols]
+                                self.logger.info(f"取得可能なシンボル例: {', '.join(symbol_names)}")
+                        except Exception as e:
+                            self.logger.warning(f"シンボル情報取得中にエラーが発生しました: {e}")
+                        
+                    except Exception as e:
+                        self.logger.warning(f"ターミナル情報の取得中にエラーが発生しました: {e}")
+                except Exception as e:
+                    self.logger.warning(f"アカウント情報の取得中にエラーが発生しました: {e}")
+                
+                return True, ""
+            else:
+                self.logger.error(f"MT5の初期化に失敗しました（{max_retries}回の試行後）: {error_message}")
+                return False, error_message
+                
         except Exception as e:
             error_msg = f"MT5の初期化中に予期せぬエラーが発生しました: {str(e)}\n{traceback.format_exc()}"
             self.logger.error(error_msg)
