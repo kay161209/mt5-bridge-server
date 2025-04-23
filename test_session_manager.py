@@ -59,12 +59,18 @@ logger.info(f"MT5_LOGIN: {MT5_LOGIN}")
 logger.info(f"MT5_SERVER: {MT5_SERVER}")
 
 # MT5プロセスを直接起動するためのオーバーライドメソッド
-def custom_run_mt5_process(mt5_exec_path, session_dir, port):
+def custom_run_mt5_process(self, session_dir, port):
     """MT5プロセスをGUIなしで起動する"""
     logger.info("カスタムMT5プロセス起動を使用")
     
+    # MT5実行ファイルパスの特定
+    mt5_exe = os.path.join(session_dir, "terminal64.exe")
+    if not os.path.exists(mt5_exe):
+        mt5_exe = self.portable_mt5_path
+        logger.info(f"セッションディレクトリにMT5実行ファイルがないため、ポータブルパスを使用: {mt5_exe}")
+    
     # バックグラウンドでMT5を起動するコマンド - 非表示モードのフラグを追加
-    cmd = [mt5_exec_path, f"/port:{port}", "/portable", "/skipupdate", "/min"]
+    cmd = [mt5_exe, f"/port:{port}", "/portable", "/skipupdate", "/min"]
     logger.info(f"実行コマンド: {' '.join(cmd)}")
     
     try:
@@ -151,7 +157,7 @@ def custom_run_mt5_process(mt5_exec_path, session_dir, port):
             logger.error(f"MT5プロセス出力:\n{output}")
             raise RuntimeError(f"MT5プロセスの起動に失敗しました。リターンコード: {returncode}")
         
-        return proc, {"stdout": stdout_data, "stderr": stderr_data}
+        return True
     except Exception as e:
         logger.exception(f"MT5プロセス起動中にエラーが発生しました: {e}")
         raise
@@ -188,7 +194,8 @@ def test_session_manager():
         session_manager = SessionManager(SESSIONS_BASE_PATH, MT5_PORTABLE_PATH)
         
         # MT5プロセス起動メソッドをオーバーライド（モンキーパッチ）
-        session_manager._run_mt5_process = custom_run_mt5_process
+        # 注意: バインドメソッドとしてセットする
+        session_manager._run_mt5_process = custom_run_mt5_process.__get__(session_manager, SessionManager)
         logger.info("カスタムMT5起動メソッドを設定しました")
         
         logger.info("SessionManager初期化成功")
@@ -206,9 +213,14 @@ def test_session_manager():
         # MT5初期化メソッドをオーバーライド
         original_initialize_mt5 = session_manager._initialize_mt5
         
-        def custom_initialize_mt5(mt5_exec_path, login, password, server):
+        def custom_initialize_mt5(self, server, login, password, timeout=60):
             """カスタムMT5初期化関数"""
             logger.info("カスタムMT5初期化関数を使用します")
+            
+            # セッションID取得
+            session_id = getattr(self, 'session_id', 'unknown')
+            session_dir = os.path.join(self.base_path, session_id)
+            mt5_exe_path = os.path.join(session_dir, "terminal64.exe")
             
             # MT5の前回の状態をクリア
             try:
@@ -221,17 +233,16 @@ def test_session_manager():
                 logger.warning(f"既存のMT5シャットダウン中にエラー: {e}")
             
             # 初期化の実行
-            logger.info(f"MT5初期化を開始: path={mt5_exec_path}, login={login}, server={server}")
+            logger.info(f"MT5初期化を開始: path={mt5_exe_path}, login={login}, server={server}")
             try:
                 # 可能なすべてのパラメータを指定して初期化
                 success = mt5.initialize(
-                    path=mt5_exec_path,
+                    path=mt5_exe_path,
                     login=login,
                     password=password,
                     server=server,
                     timeout=180000,   # 3分
                     portable=True,    # ポータブルモード
-                    winsock=False,    # WebSocketを使用しない
                 )
                 
                 if success:
@@ -246,24 +257,14 @@ def test_session_manager():
                     error = mt5.last_error()
                     logger.error(f"MT5初期化エラー: {error}")
                 
-                return {
-                    "success": success,
-                    "error_code": None if success else error[0],
-                    "error_message": None if success else error[1],
-                    "elapsed_time": 0
-                }
+                return success, "" if success else f"エラー: {error}"
                 
             except Exception as e:
                 logger.exception(f"MT5初期化中に例外が発生: {e}")
-                return {
-                    "success": False,
-                    "error_code": -99999,
-                    "error_message": str(e),
-                    "elapsed_time": 0
-                }
+                return False, f"例外: {str(e)}"
         
         # 初期化メソッドの置き換え
-        session_manager._initialize_mt5 = custom_initialize_mt5
+        session_manager._initialize_mt5 = custom_initialize_mt5.__get__(session_manager, SessionManager)
         
         # セッション作成
         session_result = session_manager.create_session(
