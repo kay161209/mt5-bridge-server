@@ -751,8 +751,8 @@ StartupMode=0
     def _initialize_mt5(self, server, login, password, timeout=60) -> Tuple[bool, str]:
         """
         MT5を初期化して接続します。二段階で処理を行います:
-        1. MT5の初期化
-        2. MT5へのログイン
+        1. MT5の初期化（パスとportableフラグのみ指定）
+        2. MT5へのログイン（初期化成功後にログイン情報でログイン）
         
         Args:
             server: MT5サーバー名
@@ -827,124 +827,58 @@ StartupMode=0
             for attempt in range(1, max_retries + 1):
                 self.logger.info(f"MT5の初期化を試行しています（{attempt}/{max_retries}）...")
                 
-                # アカウントデータ存在状況に基づく初期化方法の決定
-                if has_account_data:
-                    # アカウントデータファイルが存在する場合、基本初期化のみ行う
-                    self.logger.info("アカウントデータファイルが存在するため、基本初期化のみ行います")
-                    try:
-                        # 短いタイムアウトで接続試行
-                        initialize_result = mt5.initialize(
-                            path=mt5_exe_path,
-                            portable=True,
-                            timeout=min(10000, timeout * 1000)  # より短いタイムアウトで試行
-                        )
+                try:
+                    # セッション固有のディレクトリで起動する際は、パスとportableフラグのみ指定
+                    self.logger.info(f"MT5の基本初期化を実行します: パスとportableフラグのみ指定")
+                    initialize_result = mt5.initialize(
+                        path=mt5_exe_path,
+                        portable=True,
+                        timeout=min(15000, timeout * 1000)
+                    )
+                    
+                    # 初期化に失敗した場合
+                    if not initialize_result:
+                        error_code = mt5.last_error()
+                        error_msg = f"MT5の初期化に失敗しました。"
+                        detailed_error = get_detailed_error(error_code, error_msg)
+                        self.logger.error(detailed_error)
+                        error_message = detailed_error
                         
-                        # 初期化に失敗した場合
-                        if not initialize_result:
-                            error_code = mt5.last_error()
-                            error_msg = f"MT5の初期化に失敗しました。"
-                            detailed_error = get_detailed_error(error_code, error_msg)
-                            self.logger.error(detailed_error)
-                            error_message = detailed_error
-                            
-                            # リトライ前に少し待機
-                            time.sleep(retry_interval)
-                            continue
-                        
-                        self.logger.info(f"アカウントデータを使用した基本初期化に成功しました")
-                        success = True
-                        break
-                        
-                    except Exception as e:
-                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
-                        self.logger.error(error_message)
+                        # リトライ前に少し待機
                         time.sleep(retry_interval)
                         continue
                     
-                elif has_login_files:
-                    # ログイン情報ファイルが存在する場合、まずポータブルモードで初期化のみ行う
-                    self.logger.info("既存のログイン情報ファイルを使用して初期化します")
+                    self.logger.info("MT5の基本初期化に成功しました。ログインを実行します...")
                     
-                    try:
-                        # 2段階初期化: パスとポータブルモードのみ指定
-                        initialize_result = mt5.initialize(
-                            path=mt5_exe_path,
-                            portable=True,
-                            timeout=min(10000, timeout * 1000)
-                        )
+                    # ログイン実行
+                    login_result = mt5.login(
+                        login=login,
+                        password=password,
+                        server=server
+                    )
+                    
+                    # ログインに失敗した場合
+                    if not login_result:
+                        error_code = mt5.last_error()
+                        error_msg = f"MT5サーバーへのログインに失敗しました。"
+                        detailed_error = get_detailed_error(error_code, error_msg)
+                        self.logger.error(detailed_error)
+                        error_message = detailed_error
                         
-                        # 初期化に失敗した場合
-                        if not initialize_result:
-                            error_code = mt5.last_error()
-                            error_msg = f"MT5の初期化に失敗しました。"
-                            detailed_error = get_detailed_error(error_code, error_msg)
-                            self.logger.error(detailed_error)
-                            error_message = detailed_error
-                            
-                            # リトライ前に少し待機
-                            time.sleep(retry_interval)
-                            continue
-                        
-                        self.logger.info(f"基本初期化に成功しました。ログインを試行します...")
-                        
-                        # ログイン試行
-                        login_success = mt5.login(
-                            login=login,
-                            password=password, 
-                            server=server
-                        )
-                        
-                        if not login_success:
-                            error_code = mt5.last_error()
-                            error_msg = f"MT5サーバーへのログインに失敗しました。"
-                            detailed_error = get_detailed_error(error_code, error_msg)
-                            self.logger.error(detailed_error)
-                            error_message = detailed_error
-                            
-                            # 失敗した場合はMT5を終了して資源を解放
-                            mt5.shutdown()
-                            time.sleep(retry_interval)
-                            continue
-                        
-                        success = True
-                        break
-                    except Exception as e:
-                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
-                        self.logger.error(error_message)
+                        # 失敗した場合はMT5を終了して資源を解放
+                        mt5.shutdown()
                         time.sleep(retry_interval)
                         continue
-                else:
-                    # ログイン情報ファイルがない場合は、従来の方法で一度に初期化とログイン
-                    self.logger.info("ログイン情報をパラメータで指定して初期化します")
                     
-                    try:
-                        initialize_result = mt5.initialize(
-                            path=mt5_exe_path,
-                            login=login,
-                            password=password,
-                            server=server,
-                            timeout=min(15000, timeout * 1000)
-                        )
-                        
-                        # 初期化に失敗した場合
-                        if not initialize_result:
-                            error_code = mt5.last_error()
-                            error_msg = f"MT5の初期化に失敗しました。"
-                            detailed_error = get_detailed_error(error_code, error_msg)
-                            self.logger.error(detailed_error)
-                            error_message = detailed_error
-                            
-                            # リトライ前に少し待機
-                            time.sleep(retry_interval)
-                            continue
-                        
-                        success = True
-                        break
-                    except Exception as e:
-                        error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
-                        self.logger.error(error_message)
-                        time.sleep(retry_interval)
-                        continue
+                    self.logger.info(f"MT5サーバーへのログインに成功しました: login={login}, server={server}")
+                    success = True
+                    break
+                    
+                except Exception as e:
+                    error_message = f"MT5の初期化中に例外が発生しました: {str(e)}"
+                    self.logger.error(error_message)
+                    time.sleep(retry_interval)
+                    continue
             
             # 最終的な結果確認
             if success:

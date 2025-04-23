@@ -157,7 +157,11 @@ def custom_run_mt5_process(self, session_dir, port):
             logger.error(f"MT5プロセス出力:\n{output}")
             raise RuntimeError(f"MT5プロセスの起動に失敗しました。リターンコード: {returncode}")
         
-        return True
+        # プロセスオブジェクトを保存するため、_current_processフィールドに設定
+        self._current_process = proc
+        
+        # 重要: procオブジェクトを返す
+        return proc
     except Exception as e:
         logger.exception(f"MT5プロセス起動中にエラーが発生しました: {e}")
         raise
@@ -233,34 +237,52 @@ def test_session_manager():
                 logger.warning(f"既存のMT5シャットダウン中にエラー: {e}")
             
             # 初期化の実行
-            logger.info(f"MT5初期化を開始: path={mt5_exe_path}, login={login}, server={server}")
+            logger.info(f"MT5初期化を開始: path={mt5_exe_path}")
             try:
-                # 可能なすべてのパラメータを指定して初期化
-                success = mt5.initialize(
+                # セッション固有のディレクトリで起動する場合は、パスとportableフラグのみ指定
+                initialize_result = mt5.initialize(
                     path=mt5_exe_path,
-                    login=login,
-                    password=password,
-                    server=server,
-                    timeout=180000,   # 3分
-                    portable=True,    # ポータブルモード
+                    portable=True,
+                    timeout=180000   # 3分
                 )
                 
-                if success:
-                    logger.info("MT5初期化成功！")
-                    # 接続情報の表示
-                    try:
-                        terminal_info = mt5.terminal_info()
-                        logger.info(f"ターミナル情報: connected={terminal_info.connected}, trade_allowed={terminal_info.trade_allowed}")
-                    except Exception as e:
-                        logger.warning(f"ターミナル情報取得エラー: {e}")
-                else:
-                    error = mt5.last_error()
-                    logger.error(f"MT5初期化エラー: {error}")
+                # 初期化に失敗した場合
+                if not initialize_result:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5の初期化に失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    return False, detailed_error
                 
-                return success, "" if success else f"エラー: {error}"
+                self.logger.info("MT5初期化成功！")
+                
+                # ログイン試行
+                login_success = mt5.login(
+                    login=login,
+                    password=password,
+                    server=server
+                )
+                
+                if not login_success:
+                    error_code = mt5.last_error()
+                    error_msg = f"MT5サーバーへのログインに失敗しました。"
+                    detailed_error = get_detailed_error(error_code, error_msg)
+                    self.logger.error(detailed_error)
+                    return False, detailed_error
+                
+                self.logger.info("MT5ログインに成功しました！")
+                
+                # 接続情報の表示
+                try:
+                    terminal_info = mt5.terminal_info()
+                    logger.info(f"ターミナル情報: connected={terminal_info.connected}, trade_allowed={terminal_info.trade_allowed}")
+                except Exception as e:
+                    logger.warning(f"ターミナル情報取得エラー: {e}")
+                    
+                return True, ""
                 
             except Exception as e:
-                logger.exception(f"MT5初期化中に例外が発生: {e}")
+                logger.exception(f"MT5の初期化中に例外が発生: {e}")
                 return False, f"例外: {str(e)}"
         
         # 初期化メソッドの置き換え
@@ -300,27 +322,38 @@ def test_session_manager():
             logger.info(f"  - MT5パス: {session.mt5_path}")
             logger.info(f"  - 作成日時: {session.created_at.isoformat()}")
             
-            # セッションディレクトリの内容を表示
-            session_dir = os.path.join(SESSIONS_BASE_PATH, session_id)
-            logger.info(f"セッションディレクトリ: {session_dir}")
-            if os.path.exists(session_dir):
-                files = os.listdir(session_dir)
-                logger.info(f"セッションディレクトリ内のファイル数: {len(files)}")
-                
-                # 重要なファイルの存在確認
-                important_files = ["terminal64.exe", "portable_mode", "Config/login.ini"]
-                for file in important_files:
-                    path = os.path.join(session_dir, file)
-                    if os.path.exists(path):
-                        logger.info(f"  - ファイル存在: {file}")
-                    else:
-                        logger.warning(f"  - ファイル欠落: {file}")
-            
             # MT5プロセスが実行中か確認
-            if session.proc.poll() is None:
-                logger.info(f"MT5プロセスは実行中です (PID: {session.proc.pid})")
+            if hasattr(session, 'proc') and session.proc:
+                if session.proc.poll() is None:
+                    logger.info(f"MT5プロセスは実行中です (PID: {session.proc.pid})")
+                else:
+                    logger.warning(f"MT5プロセスは実行されていません (リターンコード: {session.proc.poll()})")
             else:
-                logger.warning(f"MT5プロセスは実行されていません (リターンコード: {session.proc.poll()})")
+                logger.warning("セッションにプロセス情報が含まれていません。MT5プロセスの状態は不明です。")
+            
+            # セッションディレクトリの検査
+            session_dir = os.path.join(SESSIONS_BASE_PATH, session_id)
+            if os.path.exists(session_dir):
+                logger.info(f"セッションディレクトリが存在します: {session_dir}")
+                
+                # セッションディレクトリ内のMT5ログファイルの確認
+                logs_dir = os.path.join(session_dir, "logs")
+                if os.path.exists(logs_dir):
+                    log_files = [f for f in os.listdir(logs_dir) if f.endswith(".log")]
+                    if log_files:
+                        newest_log = sorted(log_files)[-1]
+                        log_path = os.path.join(logs_dir, newest_log)
+                        logger.info(f"最新のMT5ログファイル: {newest_log}")
+                        
+                        # ログファイルの最新の10行を表示
+                        try:
+                            with open(os.path.join(logs_dir, newest_log), 'r', encoding='utf-8', errors='ignore') as f:
+                                last_lines = f.readlines()[-10:]
+                                logger.info(f"ログファイルの最新の行:\n{''.join(last_lines)}")
+                        except Exception as e:
+                            logger.warning(f"ログファイル読み取りエラー: {e}")
+            else:
+                logger.warning(f"セッションディレクトリが見つかりません: {session_dir}")
             
             # TODO: その他の検証を追加
             return True
