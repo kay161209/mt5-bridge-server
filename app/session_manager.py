@@ -527,6 +527,10 @@ StartupMode=0
             # プロセス環境変数を設定
             env = os.environ.copy()
             
+            # 重要な環境変数を設定
+            env['MT5_CONNECTOR_DEBUG'] = '1'  # デバッグモードを有効化
+            env['MT5_TIMEOUT'] = '60000'      # タイムアウトを長めに設定（ミリ秒）
+            
             # macOSやLinuxの場合はWine関連の環境変数を設定
             if platform.system() == 'Darwin' or platform.system() == 'Linux':
                 env['WINEDEBUG'] = '-all'
@@ -552,6 +556,9 @@ StartupMode=0
                 # 基本オプション
                 cmd_str += " /portable"
                 
+                # オフラインモードを追加
+                cmd_str += " /offline"
+                
                 # ポート指定があれば追加
                 if port:
                     cmd_str += f" /port:{port}"
@@ -566,6 +573,9 @@ StartupMode=0
                 # 基本オプション
                 cmd.append("/portable")
                 
+                # オフラインモードを追加
+                cmd.append("/offline")
+                
                 # ポート指定があれば追加
                 if port:
                     cmd.append(f"/port:{port}")
@@ -574,6 +584,15 @@ StartupMode=0
                 cmd.append("/skipupdate")  # 更新をスキップ
             
             self.logger.info(f"MT5起動コマンド: {cmd}")
+            
+            # プロセス起動前にメモリをクリア
+            if platform.system() == 'Windows':
+                try:
+                    import ctypes
+                    ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
+                    self.logger.info("システムメモリをクリアしました")
+                except Exception as e:
+                    self.logger.warning(f"メモリクリア中にエラーが発生しました: {e}")
             
             # プロセス起動
             if isinstance(cmd, list):
@@ -603,6 +622,9 @@ StartupMode=0
             pid = proc.pid
             self.logger.info(f"MT5プロセスが起動しました (PID: {pid})")
             
+            # MT5プロセスを安定させるために少し待機
+            time.sleep(2)
+            
             # プロセス出力を非同期で読み取る
             def read_output(stream, logger_method, max_lines=20):
                 lines = []
@@ -617,25 +639,17 @@ StartupMode=0
                 if lines:
                     logger_method("\n".join(lines))
                 return lines
-                
+            
+            # 標準出力とエラー出力を読み取り
             stdout_lines = read_output(proc.stdout, lambda msg: self.logger.info(f"MT5出力: {msg}"))
             stderr_lines = read_output(proc.stderr, lambda msg: self.logger.error(f"MT5エラー: {msg}"))
             
+            # プロセス状態のモニタリングを少し待ってから行う
+            time.sleep(5)
+            
             # プロセス状態のモニタリング
             try:
-                p = psutil.Process(pid)
-                
-                # プロセスのメモリと CPU 使用率を記録
-                with p.oneshot():
-                    mem_info = p.memory_info()
-                    mem_mb = mem_info.rss / 1024 / 1024
-                    cpu_percent = p.cpu_percent(interval=0.5)
-                    self.logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
-                
-                # ショートスリープを入れて初期化を待つ
-                time.sleep(5)
-                
-                # プロセスの終了コードをチェック
+                # プロセスが存在するか確認
                 if proc.poll() is not None:
                     self.logger.error(f"MT5プロセスが早期に終了しました。終了コード: {proc.poll()}")
                     
@@ -658,7 +672,35 @@ StartupMode=0
                         error_description = "一般的なエラー。起動パラメータまたは設定ファイルに問題がある可能性があります。"
                     
                     self.logger.error(f"MT5エラーの詳細: {error_description}")
+                    
+                    # MT5プロセスのログファイルをチェック
+                    try:
+                        logs_dir = os.path.join(session_dir, "logs")
+                        if os.path.exists(logs_dir):
+                            log_files = [f for f in os.listdir(logs_dir) if f.endswith(".log")]
+                            for log_file in sorted(log_files)[-2:]:  # 最新の2つのログファイルを確認
+                                log_path = os.path.join(logs_dir, log_file)
+                                self.logger.info(f"MT5ログファイルを確認: {log_path}")
+                                try:
+                                    with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                                        log_content = f.read(5000)  # 最初の5000文字を読み取る
+                                        self.logger.info(f"MT5ログファイル内容:\n{log_content}")
+                                except Exception as e:
+                                    self.logger.error(f"ログファイルの読み取りに失敗: {e}")
+                    except Exception as e:
+                        self.logger.error(f"MT5ログファイルの確認中にエラー発生: {e}")
+                    
                     return False
+                
+                # プロセスが実行中の場合
+                p = psutil.Process(pid)
+                
+                # プロセスのメモリと CPU 使用率を記録
+                with p.oneshot():
+                    mem_info = p.memory_info()
+                    mem_mb = mem_info.rss / 1024 / 1024
+                    cpu_percent = p.cpu_percent(interval=0.5)
+                    self.logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
                 
                 # GUIの状態を確認
                 gui_status = check_gui_status(pid)
@@ -1430,6 +1472,10 @@ CertInstall=0
 NewsEnable=0
 AutoUpdate=0
 FirstStart=0
+Community=0
+EnableAPI=1
+WebRequests=1
+SocketsPort=0
 [Window]
 Maximized=0
 Width=800
@@ -1441,6 +1487,17 @@ StartupMode=0
 MaxBars=10000
 PrintColor=1
 SaveDeleted=0
+[Network]
+CommunityServer=MetaQuotes-Demo
+CommunityPassword=
+CommunityLastLogin=
+NewsServer=news.metaquotes.net
+NewsUpdate=0
+ProxyServer=
+ProxyType=0
+ProxyPort=0
+ProxyLogin=
+SocketsPort=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)
@@ -1459,6 +1516,10 @@ CertInstall=0
 NewsEnable=0
 AutoUpdate=0
 FirstStart=0
+Community=0
+EnableAPI=1
+WebRequests=1
+SocketsPort=0
 [Window]
 Maximized=0
 Width=800
@@ -1470,6 +1531,17 @@ StartupMode=0
 MaxBars=10000
 PrintColor=1
 SaveDeleted=0
+[Network]
+CommunityServer=MetaQuotes-Demo
+CommunityPassword=
+CommunityLastLogin=
+NewsServer=news.metaquotes.net
+NewsUpdate=0
+ProxyServer=
+ProxyType=0
+ProxyPort=0
+ProxyLogin=
+SocketsPort=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)
@@ -1493,6 +1565,9 @@ MQL5Login=0
 ProxyEnable=0
 ProxyServer=
 ProxyLogin=
+WebRequests=1
+EnableAPI=1
+SocketsPort=0
 """
             with open(access_ini_path, "w") as f:
                 f.write(access_ini_content)
@@ -1505,6 +1580,10 @@ StartScript=1
 ExpertsEnable=1
 ScriptsEnable=1
 ExpertsSynchronize=1
+ExpertsRestart=1
+ExpertsDllImport=1
+ExpertsAllowWebRequests=1
+WebAPIEnabled=1
 """
             with open(startup_ini_path, "w") as f:
                 f.write(startup_ini_content)
