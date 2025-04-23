@@ -189,8 +189,44 @@ def custom_run_mt5_process(session_dir, port=None):
         
         terminal_ini_path = os.path.join(config_dir, "terminal.ini")
         
-        # terminal.iniの基本内容
-        terminal_ini_content = f"""[Common]
+        # 既存のterminal.iniがある場合はそれを使用
+        if os.path.exists(terminal_ini_path):
+            logger.info(f"既存のterminal.iniファイルを使用します: {terminal_ini_path}")
+            
+            # [Network]セクションのポート設定だけを更新
+            try:
+                with open(terminal_ini_path, "r", encoding="utf-8", errors="ignore") as f:
+                    terminal_ini_content = f.read()
+                
+                # [Network]セクションがあるか確認
+                if "[Network]" in terminal_ini_content:
+                    # SocketsPortの設定を更新
+                    if "SocketsPort=" in terminal_ini_content:
+                        terminal_ini_content = terminal_ini_content.replace(
+                            "SocketsPort=", f"SocketsPort={port if port else 0}\n# "
+                        )
+                    else:
+                        # [Network]セクションにSocketsPort設定を追加
+                        terminal_ini_content = terminal_ini_content.replace(
+                            "[Network]", f"[Network]\nSocketsPort={port if port else 0}"
+                        )
+                else:
+                    # [Network]セクションを追加
+                    terminal_ini_content += f"\n[Network]\nSocketsPort={port if port else 0}\n"
+                
+                # 更新された内容を書き込み
+                with open(terminal_ini_path, "w", encoding="utf-8") as f:
+                    f.write(terminal_ini_content)
+                logger.info(f"terminal.iniファイルのポート設定を更新しました（ポート: {port if port else 0}）")
+            except Exception as e:
+                logger.warning(f"terminal.iniの更新中にエラーが発生しました: {e}")
+                # エラー時は新規作成
+                terminal_ini_content = f"""[Network]\nSocketsPort={port if port else 0}\n"""
+                with open(terminal_ini_path, "w", encoding="utf-8") as f:
+                    f.write(terminal_ini_content)
+        else:
+            # terminal.iniの基本内容
+            terminal_ini_content = f"""[Common]
 Login=0
 ProxyEnable=0
 CertInstall=0
@@ -223,14 +259,15 @@ ProxyPort=0
 ProxyLogin=
 SocketsPort={port if port else 0}
 """
-        # terminal.iniファイルを保存
-        with open(terminal_ini_path, "w") as f:
-            f.write(terminal_ini_content)
-        logger.info(f"terminal.iniファイルを作成/更新しました（ポート: {port if port else 0}）")
+            # terminal.iniファイルを保存
+            with open(terminal_ini_path, "w", encoding="utf-8") as f:
+                f.write(terminal_ini_content)
+            logger.info(f"terminal.iniファイルを新規作成しました（ポート: {port if port else 0}）")
         
         # access.iniファイルも更新
         access_ini_path = os.path.join(config_dir, "access.ini")
-        access_ini_content = f"""[Environment]
+        if not os.path.exists(access_ini_path):
+            access_ini_content = f"""[Environment]
 MQL5Login=0
 ProxyEnable=0
 ProxyServer=
@@ -239,8 +276,9 @@ WebRequests=1
 EnableAPI=1
 SocketsPort={port if port else 0}
 """
-        with open(access_ini_path, "w") as f:
-            f.write(access_ini_content)
+            with open(access_ini_path, "w", encoding="utf-8") as f:
+                f.write(access_ini_content)
+            logger.info("access.iniファイルを新規作成しました")
         
         # portable_modeファイルを作成
         with open(os.path.join(session_dir, "portable_mode"), "w") as f:
@@ -256,13 +294,21 @@ SocketsPort={port if port else 0}
         
         # コマンド構築
         if platform.system() == 'Windows':
-            cmd = f'"{mt5_exe}" /portable /offline /skipupdate'
-            if port:
-                cmd += f" /port:{port}"
+            cmd = f'"{mt5_exe}" /portable /skipupdate'
+            # オフラインモードを削除
+            # /offlineフラグを削除することでオンラインモードで起動
+            
+            # 自動ポート選択を優先（ポート競合を避けるため）
+            # if port:
+            #    cmd += f" /port:{port}"
         else:
-            cmd = [mt5_exe, "/portable", "/offline", "/skipupdate"]
-            if port:
-                cmd.append(f"/port:{port}")
+            cmd = [mt5_exe, "/portable", "/skipupdate"]
+            # オフラインモードを削除
+            # /offlineフラグを削除することでオンラインモードで起動
+            
+            # 自動ポート選択を優先（ポート競合を避けるため）
+            # if port:
+            #    cmd.append(f"/port:{port}")
         
         logger.info(f"MT5起動コマンド: {cmd}")
         
@@ -349,6 +395,33 @@ def test_session_manager():
                 else:
                     logger.error(f"terminal64.exeが見つかりません: {terminal_exe}")
                     return
+                
+                # MT5設定ファイルをコピー
+                logger.info("MT5設定ファイルをコピーしています...")
+                config_files = [
+                    "accounts.dat",
+                    os.path.join("Config", "connection_settings.ini"),
+                    os.path.join("Config", "login.ini"),
+                    os.path.join("Config", "accounts_settings.ini"),
+                    os.path.join("Config", "terminal.ini"),
+                    os.path.join("Config", "access.ini"),
+                    "symbols.dat",
+                    "symbols.sel"
+                ]
+                
+                for file_path in config_files:
+                    src_path = os.path.join(mt5_install_dir, file_path)
+                    dst_path = os.path.join(session_dir, file_path)
+                    dst_dir = os.path.dirname(dst_path)
+                    
+                    if os.path.exists(src_path):
+                        # 必要なディレクトリを作成
+                        os.makedirs(dst_dir, exist_ok=True)
+                        # ファイルをコピー
+                        shutil.copy2(src_path, dst_path)
+                        logger.info(f"設定ファイルをコピーしました: {file_path}")
+                    else:
+                        logger.warning(f"設定ファイルが見つかりません: {src_path}")
                 
                 # MT5プロセスを起動
                 proc = custom_run_mt5_process(session_dir)
