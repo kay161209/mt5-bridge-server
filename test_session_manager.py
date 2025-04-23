@@ -41,6 +41,7 @@ if env_file.exists():
     logger.info(f"環境変数を読み込みました: {env_file}")
 else:
     logger.warning(f".envファイルが見つかりません: {env_file}")
+    logger.warning("MT5_PORTABLE_PATHなどの重要な環境変数を設定してください")
 
 # session_managerモジュールをインポート
 try:
@@ -62,6 +63,11 @@ logger.info(f"MT5_PORTABLE_PATH: {MT5_PORTABLE_PATH}")
 logger.info(f"SESSIONS_BASE_PATH: {SESSIONS_BASE_PATH}")
 logger.info(f"MT5_LOGIN: {MT5_LOGIN}")
 logger.info(f"MT5_SERVER: {MT5_SERVER}")
+
+# MT5_PORTABLE_PATHが正しく設定されているか確認
+if not os.path.exists(MT5_PORTABLE_PATH):
+    logger.error(f"MT5ポータブル版の実行ファイルが見つかりません: {MT5_PORTABLE_PATH}")
+    logger.error("環境変数MT5_PORTABLE_PATHが正しく設定されているか確認してください")
 
 # MetaTrader5をインポート
 try:
@@ -283,7 +289,8 @@ SocketsPort={port if port else 0}
         # portable_modeファイルを作成
         with open(os.path.join(session_dir, "portable_mode"), "w") as f:
             f.write("portable")
-            
+        logger.info(f"ポータブルモードフラグファイルを作成しました: {os.path.join(session_dir, 'portable_mode')}")
+        
         # MT5実行ファイルパス
         mt5_exe = os.path.join(session_dir, "terminal64.exe")
         
@@ -370,11 +377,14 @@ def test_session_manager():
         logger.info(f"一時ディレクトリを作成しました: {temp_dir} (絶対パス: {os.path.abspath(temp_dir)})")
         
         # 元のMT5インストールディレクトリパス
-        # 実際の環境に合わせて変更してください
         mt5_install_dir = r"C:\Program Files\MetaTrader 5"
         
-        if not os.path.exists(mt5_install_dir):
-            logger.error(f"MT5インストールディレクトリが見つかりません: {mt5_install_dir}")
+        # MT5ポータブル版のディレクトリパス（環境変数から取得）
+        portable_mt5_dir = os.path.dirname(MT5_PORTABLE_PATH)
+        logger.info(f"MT5ポータブル版のディレクトリ: {portable_mt5_dir}")
+        
+        if not os.path.exists(portable_mt5_dir):
+            logger.error(f"MT5ポータブル版のディレクトリが見つかりません: {portable_mt5_dir}")
             return
         
         # テスト用のセッションディレクトリ
@@ -387,17 +397,22 @@ def test_session_manager():
         try:
             # Windows環境の場合
             if platform.system() == 'Windows':
-                # terminal64.exeをコピー
-                terminal_exe = os.path.join(mt5_install_dir, "terminal64.exe")
+                # terminal64.exeをコピー - ポータブル版から
+                terminal_exe = os.path.join(portable_mt5_dir, "terminal64.exe")
+                if not os.path.exists(terminal_exe):
+                    # 指定パスになければMT5_PORTABLE_PATHそのものを使用
+                    terminal_exe = MT5_PORTABLE_PATH
+                
                 if os.path.exists(terminal_exe):
                     shutil.copy2(terminal_exe, os.path.join(session_dir, "terminal64.exe"))
-                    logger.info(f"terminal64.exeをコピーしました")
+                    logger.info(f"terminal64.exeをコピーしました: {terminal_exe}")
                 else:
                     logger.error(f"terminal64.exeが見つかりません: {terminal_exe}")
                     return
                 
-                # MT5設定ファイルをコピー
+                # MT5設定ファイルをコピー - ポータブル版のインストールディレクトリから
                 logger.info("MT5設定ファイルをコピーしています...")
+                
                 config_files = [
                     "accounts.dat",
                     os.path.join("Config", "connection_settings.ini"),
@@ -410,7 +425,7 @@ def test_session_manager():
                 ]
                 
                 for file_path in config_files:
-                    src_path = os.path.join(mt5_install_dir, file_path)
+                    src_path = os.path.join(portable_mt5_dir, file_path)
                     dst_path = os.path.join(session_dir, file_path)
                     dst_dir = os.path.dirname(dst_path)
                     
