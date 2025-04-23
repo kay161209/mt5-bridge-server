@@ -266,7 +266,7 @@ def test_session_manager():
         session_manager._initialize_mt5 = custom_initialize_mt5
         
         # セッション作成
-        session_id = session_manager.create_session(
+        session_result = session_manager.create_session(
             login=MT5_LOGIN,
             password=MT5_PASSWORD,
             server=MT5_SERVER
@@ -274,6 +274,18 @@ def test_session_manager():
         
         elapsed_time = time.time() - start_time
         logger.info(f"セッション作成完了！ 所要時間: {elapsed_time:.2f}秒")
+        
+        # 辞書型で返された場合の処理
+        if isinstance(session_result, dict):
+            logger.info(f"セッション結果: {session_result}")
+            if not session_result.get("success", False):
+                logger.error(f"セッション作成に失敗しました: {session_result.get('error', '不明なエラー')}")
+                return False
+            session_id = session_result.get("session_id")
+        else:
+            # 従来の方法（文字列で返された場合）- 後方互換性のため
+            session_id = session_result
+        
         logger.info(f"セッションID: {session_id}")
         
         # 作成されたセッションの情報を表示
