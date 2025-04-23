@@ -524,6 +524,19 @@ StartupMode=0
             sys_info = get_system_info()
             self.logger.info(f"システム情報: {json.dumps(sys_info, indent=2, ensure_ascii=False)}")
             
+            # プロセス環境変数を設定
+            env = os.environ.copy()
+            
+            # macOSやLinuxの場合はWine関連の環境変数を設定
+            if platform.system() == 'Darwin' or platform.system() == 'Linux':
+                env['WINEDEBUG'] = '-all'
+                env['DISPLAY'] = os.environ.get('DISPLAY', ':0.0')
+                self.logger.info(f"Wine環境変数を設定: WINEDEBUG=-all, DISPLAY={env['DISPLAY']}")
+            
+            # Windows環境ではUTF-8モードを有効にする
+            if platform.system() == 'Windows':
+                env['PYTHONIOENCODING'] = 'utf-8'
+                
             # accounts.datファイルの存在確認
             accounts_dat_path = os.path.join(session_dir, "accounts.dat")
             has_account_data = os.path.exists(accounts_dat_path)
@@ -532,10 +545,7 @@ StartupMode=0
             else:
                 self.logger.info(f"アカウントデータファイルが見つかりません。ログイン情報が必要です。")
             
-            # コマンド構築（アカウントデータが存在する場合は自動ログイン）
-            cmd_options = []
-            
-            # OSに応じたコマンド調整
+            # コマンド構築
             if platform.system() == 'Windows':
                 cmd_str = f'"{mt5_exe}"'
                 
@@ -574,10 +584,10 @@ StartupMode=0
                     stderr=subprocess.PIPE,
                     universal_newlines=True,
                     encoding='utf-8',
-                    bufsize=1
+                    bufsize=1,
+                    env=env
                 )
             else:
-                creation_flags = 0
                 proc = subprocess.Popen(
                     cmd, 
                     cwd=session_dir,
@@ -586,11 +596,30 @@ StartupMode=0
                     universal_newlines=True,
                     encoding='utf-8',
                     bufsize=1,
-                    shell=True
+                    shell=True,
+                    env=env
                 )
             
             pid = proc.pid
             self.logger.info(f"MT5プロセスが起動しました (PID: {pid})")
+            
+            # プロセス出力を非同期で読み取る
+            def read_output(stream, logger_method, max_lines=20):
+                lines = []
+                for _ in range(max_lines):
+                    try:
+                        line = stream.readline()
+                        if not line:
+                            break
+                        lines.append(line.strip())
+                    except:
+                        break
+                if lines:
+                    logger_method("\n".join(lines))
+                return lines
+                
+            stdout_lines = read_output(proc.stdout, lambda msg: self.logger.info(f"MT5出力: {msg}"))
+            stderr_lines = read_output(proc.stderr, lambda msg: self.logger.error(f"MT5エラー: {msg}"))
             
             # プロセス状態のモニタリング
             try:
@@ -603,8 +632,35 @@ StartupMode=0
                     cpu_percent = p.cpu_percent(interval=0.5)
                     self.logger.info(f"MT5プロセス情報: メモリ使用量={mem_mb:.2f}MB, CPU使用率={cpu_percent:.1f}%")
                 
+                # ショートスリープを入れて初期化を待つ
+                time.sleep(5)
+                
+                # プロセスの終了コードをチェック
+                if proc.poll() is not None:
+                    self.logger.error(f"MT5プロセスが早期に終了しました。終了コード: {proc.poll()}")
+                    
+                    # 追加のエラー情報を収集
+                    if stderr_lines:
+                        self.logger.error(f"MT5プロセスのエラー出力: {stderr_lines}")
+                    
+                    if stdout_lines:
+                        self.logger.info(f"MT5プロセスの標準出力: {stdout_lines}")
+                    
+                    # 詳細なエラーコードの説明を提供
+                    error_code = proc.poll()
+                    error_description = "不明なエラー"
+                    
+                    if error_code == 10053:
+                        error_description = "ソケット接続が中断されました。ネットワーク接続またはポート競合の問題の可能性があります。"
+                    elif error_code == 10054:
+                        error_description = "接続が強制的に閉じられました。サーバーまたはファイアウォールによって接続が拒否された可能性があります。"
+                    elif error_code == 1:
+                        error_description = "一般的なエラー。起動パラメータまたは設定ファイルに問題がある可能性があります。"
+                    
+                    self.logger.error(f"MT5エラーの詳細: {error_description}")
+                    return False
+                
                 # GUIの状態を確認
-                time.sleep(2)  # GUIが表示されるまで少し待機
                 gui_status = check_gui_status(pid)
                 self.logger.info(f"MT5 GUIステータス: {json.dumps(gui_status, indent=2, ensure_ascii=False)}")
                 
@@ -614,21 +670,6 @@ StartupMode=0
                     if platform.system() == 'Darwin' or platform.system() == 'Linux':
                         wine_env_vars = {k: v for k, v in os.environ.items() if 'WINE' in k.upper()}
                         self.logger.info(f"Wine環境変数: {json.dumps(wine_env_vars, indent=2, ensure_ascii=False)}")
-                        # プロセスの出力を記録
-                        stdout_data, stderr_data = "", ""
-                        try:
-                            # 標準出力と標準エラーを非ブロッキングで読み取る
-                            stdout_ready, _, _ = select.select([proc.stdout], [], [], 0.5)
-                            if stdout_ready:
-                                stdout_data = proc.stdout.read(4096)
-                            stderr_ready, _, _ = select.select([proc.stderr], [], [], 0.5)
-                            if stderr_ready:
-                                stderr_data = proc.stderr.read(4096)
-                        except Exception as e:
-                            self.logger.error(f"プロセス出力の読み取り中にエラーが発生しました: {e}")
-                        
-                        self.logger.info(f"MT5プロセスの標準出力: {stdout_data}")
-                        self.logger.info(f"MT5プロセスの標準エラー: {stderr_data}")
                 
                 # セッション情報を更新
                 self._current_process = proc
@@ -655,12 +696,6 @@ StartupMode=0
                 return False
             except Exception as e:
                 self.logger.error(f"プロセス情報の取得中にエラーが発生しました: {e}")
-                return False
-            
-            # プロセスを少し待機して状態を確認
-            time.sleep(3)
-            if proc.poll() is not None:
-                self.logger.error(f"MT5プロセスが早期に終了しました。終了コード: {proc.poll()}")
                 return False
                 
             self.logger.info(f"MT5プロセスが正常に起動しています")
@@ -1304,12 +1339,15 @@ StartupMode=0
             if has_login_files:
                 self.logger.info(f"既存のログイン情報ファイルが見つかりました。terminal.iniファイルのみ更新します。")
                 
-                # terminal.iniファイルの作成（GUI設定のみ）
+                # terminal.iniファイルの作成
                 terminal_ini_path = os.path.join(config_dir, "terminal.ini")
                 terminal_ini_content = """[Common]
+Login=0
 ProxyEnable=0
+CertInstall=0
 NewsEnable=0
 AutoUpdate=0
+FirstStart=0
 [Window]
 Maximized=0
 Width=800
@@ -1317,22 +1355,28 @@ Height=600
 Left=100
 Top=100
 StartupMode=0
+[Charts]
+MaxBars=10000
+PrintColor=1
+SaveDeleted=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)
-                self.logger.info(f"terminal.iniファイルを作成しました（GUI設定のみ）: {terminal_ini_path}")
+                self.logger.info(f"terminal.iniファイルを作成しました: {terminal_ini_path}")
             else:
                 # コピーされたログイン情報ファイルがない場合は、新規に作成
                 self.logger.info(f"ログイン情報ファイルが見つからないため、新しく作成します。")
                 
-                # terminal.iniファイルを作成（ログイン情報も含む）
+                # terminal.iniファイルを作成
                 terminal_ini_path = os.path.join(config_dir, "terminal.ini")
                 terminal_ini_content = f"""[Common]
 Login={login}
 Server={server}
 ProxyEnable=0
+CertInstall=0
 NewsEnable=0
 AutoUpdate=0
+FirstStart=0
 [Window]
 Maximized=0
 Width=800
@@ -1340,21 +1384,48 @@ Height=600
 Left=100
 Top=100
 StartupMode=0
+[Charts]
+MaxBars=10000
+PrintColor=1
+SaveDeleted=0
 """
                 with open(terminal_ini_path, "w") as f:
                     f.write(terminal_ini_content)
-                self.logger.info(f"terminal.iniファイルを作成しました（ログイン情報込み）: {terminal_ini_path}")
+                self.logger.info(f"terminal.iniファイルを作成しました: {terminal_ini_path}")
                 
-                # 簡単なログイン情報ファイルも作成
+                # ログイン情報ファイルも作成
                 with open(connection_file, "w") as f:
                     f.write(f"[connection]\nserver={server}\n")
                 
                 with open(login_file, "w") as f:
                     f.write(f"[login]\nlogin={login}\n")
             
-            # portable_modeファイルを作成（常に作成）
+            # portable_modeファイルを作成
             with open(os.path.join(session_dir, "portable_mode"), "w") as f:
                 f.write("portable")
+            
+            # access.iniファイルを作成
+            access_ini_path = os.path.join(config_dir, "access.ini")
+            access_ini_content = """[Environment]
+MQL5Login=0
+ProxyEnable=0
+ProxyServer=
+ProxyLogin=
+"""
+            with open(access_ini_path, "w") as f:
+                f.write(access_ini_content)
+            
+            # startup.iniファイルを作成
+            startup_ini_path = os.path.join(config_dir, "startup.ini")
+            startup_ini_content = """[Startup]
+StartExpert=1
+StartScript=1
+ExpertsEnable=1
+ScriptsEnable=1
+ExpertsSynchronize=1
+"""
+            with open(startup_ini_path, "w") as f:
+                f.write(startup_ini_content)
             
         except Exception as e:
             self.logger.error(f"MT5設定ファイルの作成中にエラーが発生しました: {e}")
