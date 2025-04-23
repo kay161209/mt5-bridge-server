@@ -18,6 +18,7 @@ import platform
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+import shutil
 
 # 現在のファイルからの相対パスでappディレクトリを追加
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -300,6 +301,15 @@ SocketsPort={port if port else 0}
         logger.error(f"MT5プロセスの起動中にエラーが発生しました: {e}")
         return None
 
+# カスタム一時ディレクトリクラス（エラーを無視）
+class IgnoreErrorsTemporaryDirectory(tempfile.TemporaryDirectory):
+    def cleanup(self):
+        try:
+            super().cleanup()
+        except PermissionError as e:
+            print(f"一時ディレクトリのクリーンアップ中にエラー: {e}")
+            print("エラーを無視して処理を続行します")
+
 def test_session_manager():
     """セッションマネージャのテスト"""
     # ログ設定
@@ -309,8 +319,10 @@ def test_session_manager():
     )
     logger = logging.getLogger("test_session")
     
-    # テスト用の一時ディレクトリを作成
-    with tempfile.TemporaryDirectory() as temp_dir:
+    # テスト用の一時ディレクトリを作成（エラーを無視するバージョン）
+    with IgnoreErrorsTemporaryDirectory() as temp_dir:
+        logger.info(f"一時ディレクトリを作成しました: {temp_dir} (絶対パス: {os.path.abspath(temp_dir)})")
+        
         # 元のMT5インストールディレクトリパス
         # 実際の環境に合わせて変更してください
         mt5_install_dir = r"C:\Program Files\MetaTrader 5"
@@ -332,7 +344,6 @@ def test_session_manager():
                 # terminal64.exeをコピー
                 terminal_exe = os.path.join(mt5_install_dir, "terminal64.exe")
                 if os.path.exists(terminal_exe):
-                    import shutil
                     shutil.copy2(terminal_exe, os.path.join(session_dir, "terminal64.exe"))
                     logger.info(f"terminal64.exeをコピーしました")
                 else:
@@ -380,6 +391,32 @@ def test_session_manager():
                     proc.terminate()
                     proc.wait(timeout=5)
                     logger.info("MT5プロセスを終了しました")
+                
+                # ログファイルのハンドルが閉じられるまで待機
+                log_file = os.path.join(session_dir, "logs", f"{datetime.now().strftime('%Y%m%d')}.log")
+                if os.path.exists(log_file):
+                    logger.info(f"ログファイルのハンドルが閉じられるまで待機します: {log_file}")
+                    # 一時的に待機を長めに設定
+                    time.sleep(5)  # 2秒から5秒に増加
+                    
+                    # Windows環境では関連するすべてのMT5プロセスを強制的に終了
+                    if platform.system() == 'Windows':
+                        try:
+                            # プロセスを強制的に終了
+                            subprocess.run(['taskkill', '/F', '/IM', 'terminal64.exe', '/T'], 
+                                          shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                            logger.info("関連するMT5プロセスを強制終了しました")
+                        except Exception as e:
+                            logger.warning(f"プロセス終了コマンド実行中にエラー: {e}")
+                    
+                    # ファイルのアクセス権を確認
+                    try:
+                        with open(log_file, 'a') as f:
+                            f.write("# セッション終了\n")
+                        logger.info("ログファイルにアクセスできました")
+                    except PermissionError:
+                        logger.warning(f"ログファイルにまだアクセスできません: {log_file}")
+                        time.sleep(5)  # さらに待機
             else:
                 logger.info("Windowsプラットフォーム以外ではテストをスキップします")
         
