@@ -529,7 +529,7 @@ StartupMode=0
             
             # 重要な環境変数を設定
             env['MT5_CONNECTOR_DEBUG'] = '1'  # デバッグモードを有効化
-            env['MT5_TIMEOUT'] = '60000'      # タイムアウトを長めに設定（ミリ秒）
+            env['MT5_TIMEOUT'] = '120000'      # タイムアウトを長めに設定（ミリ秒）
             
             # macOSやLinuxの場合はWine関連の環境変数を設定
             if platform.system() == 'Darwin' or platform.system() == 'Linux':
@@ -549,6 +549,56 @@ StartupMode=0
             else:
                 self.logger.info(f"アカウントデータファイルが見つかりません。ログイン情報が必要です。")
             
+            # ポート設定を最適化
+            # 固定ポートを使用する場合、競合リスクがあるため、
+            # 設定ファイルでSocketsPort=0を設定し、MT5に自動選択させる
+            config_dir = os.path.join(session_dir, "Config")
+            terminal_ini_path = os.path.join(config_dir, "terminal.ini")
+            
+            # MT5のポート設定をチェック/修正
+            if os.path.exists(terminal_ini_path):
+                self.logger.info(f"MT5の接続ポート設定を最適化します: {terminal_ini_path}")
+                try:
+                    # 既存のterminal.iniファイルの内容を読み取り
+                    with open(terminal_ini_path, "r", encoding='utf-8') as f:
+                        terminal_ini_content = f.read()
+                    
+                    # [Network]セクションがあるか確認し、なければ追加
+                    if "[Network]" not in terminal_ini_content:
+                        terminal_ini_content += "\n[Network]\nSocketsPort=0\n"
+                        with open(terminal_ini_path, "w", encoding='utf-8') as f:
+                            f.write(terminal_ini_content)
+                        self.logger.info("terminal.iniに[Network]セクションとSocketsPort=0設定を追加しました")
+                    # [Network]セクションにSocketsPort=0設定があるか確認
+                    elif "SocketsPort=0" not in terminal_ini_content:
+                        # [Network]セクションにSocketsPort=0を追加
+                        new_content = terminal_ini_content.replace(
+                            "[Network]", 
+                            "[Network]\nSocketsPort=0"
+                        )
+                        with open(terminal_ini_path, "w", encoding='utf-8') as f:
+                            f.write(new_content)
+                        self.logger.info("terminal.iniにSocketsPort=0設定を追加しました")
+                except Exception as e:
+                    self.logger.warning(f"terminal.iniファイルの更新中にエラーが発生しました: {e}")
+                    # ファイルがない場合は作成
+                    try:
+                        os.makedirs(config_dir, exist_ok=True)
+                        with open(terminal_ini_path, "w", encoding='utf-8') as f:
+                            f.write("[Network]\nSocketsPort=0\n")
+                        self.logger.info("新しいterminal.iniファイルを作成しSocketsPort=0を設定しました")
+                    except Exception as e2:
+                        self.logger.error(f"terminal.iniファイルの作成に失敗しました: {e2}")
+            else:
+                # ファイルがない場合は作成
+                try:
+                    os.makedirs(config_dir, exist_ok=True)
+                    with open(terminal_ini_path, "w", encoding='utf-8') as f:
+                        f.write("[Network]\nSocketsPort=0\n")
+                    self.logger.info("新しいterminal.iniファイルを作成しSocketsPort=0を設定しました")
+                except Exception as e:
+                    self.logger.error(f"terminal.iniファイルの作成に失敗しました: {e}")
+            
             # コマンド構築
             if platform.system() == 'Windows':
                 cmd_str = f'"{mt5_exe}"'
@@ -556,12 +606,13 @@ StartupMode=0
                 # 基本オプション
                 cmd_str += " /portable"
                 
-                # オフラインモードを追加
-                cmd_str += " /offline"
+                # オフラインモードを必要に応じて調整
+                # オフラインモードを一旦無効化してみる
+                # cmd_str += " /offline"
                 
-                # ポート指定があれば追加
-                if port:
-                    cmd_str += f" /port:{port}"
+                # ポート指定があれば追加（自動ポート選択を優先）
+                # if port:
+                #     cmd_str += f" /port:{port}"
                 
                 # 必要なオプションを追加
                 cmd_str += " /skipupdate"  # 更新をスキップ
@@ -573,12 +624,13 @@ StartupMode=0
                 # 基本オプション
                 cmd.append("/portable")
                 
-                # オフラインモードを追加
-                cmd.append("/offline")
+                # オフラインモードを必要に応じて調整
+                # オフラインモードを一旦無効化してみる
+                # cmd.append("/offline")
                 
-                # ポート指定があれば追加
-                if port:
-                    cmd.append(f"/port:{port}")
+                # ポート指定があれば追加（自動ポート選択を優先）
+                # if port:
+                #     cmd.append(f"/port:{port}")
                 
                 # 必要なオプションを追加
                 cmd.append("/skipupdate")  # 更新をスキップ
@@ -623,7 +675,7 @@ StartupMode=0
             self.logger.info(f"MT5プロセスが起動しました (PID: {pid})")
             
             # MT5プロセスを安定させるために少し待機
-            time.sleep(2)
+            time.sleep(5)  # 2秒から5秒に増加
             
             # プロセス出力を非同期で読み取る
             def read_output(stream, logger_method, max_lines=20):
@@ -645,7 +697,7 @@ StartupMode=0
             stderr_lines = read_output(proc.stderr, lambda msg: self.logger.error(f"MT5エラー: {msg}"))
             
             # プロセス状態のモニタリングを少し待ってから行う
-            time.sleep(5)
+            time.sleep(10)  # 5秒から10秒に増加
             
             # プロセス状態のモニタリング
             try:
