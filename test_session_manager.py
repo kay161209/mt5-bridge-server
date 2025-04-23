@@ -294,6 +294,14 @@ SocketsPort={port if port else 0}
         # MT5実行ファイルパス
         mt5_exe = os.path.join(session_dir, "terminal64.exe")
         
+        # accounts.datファイルの存在確認 (Config内のパスを確認)
+        accounts_dat_path = os.path.join(session_dir, "Config", "accounts.dat")
+        has_account_data = os.path.exists(accounts_dat_path)
+        if has_account_data:
+            logger.info(f"アカウントデータファイルが見つかりました: {accounts_dat_path}")
+        else:
+            logger.info(f"アカウントデータファイルが見つかりません。ログイン情報が必要です。")
+        
         # 環境変数をセット
         env = os.environ.copy()
         env['MT5_CONNECTOR_DEBUG'] = '1'
@@ -414,7 +422,7 @@ def test_session_manager():
                 logger.info("MT5設定ファイルをコピーしています...")
                 
                 config_files = [
-                    "accounts.dat",
+                    os.path.join("Config", "accounts.dat"),  # accounts.datはConfigディレクトリ内
                     os.path.join("Config", "connection_settings.ini"),
                     os.path.join("Config", "login.ini"),
                     os.path.join("Config", "accounts_settings.ini"),
@@ -434,7 +442,7 @@ def test_session_manager():
                         os.makedirs(dst_dir, exist_ok=True)
                         # ファイルをコピー
                         shutil.copy2(src_path, dst_path)
-                        logger.info(f"設定ファイルをコピーしました: {file_path}")
+                        logger.info(f"設定ファイルをコピーしました: {src_path} -> {dst_path}")
                     else:
                         logger.warning(f"設定ファイルが見つかりません: {src_path}")
                 
