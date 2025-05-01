@@ -9,6 +9,7 @@ import sys
 import time
 import json
 import unittest
+import httpx
 from fastapi.testclient import TestClient
 from app.main import app
 from app.config import settings
@@ -16,9 +17,14 @@ from app.config import settings
 class TestMT5(unittest.TestCase):
     def setUp(self):
         """テストの前準備"""
-        self.client = TestClient(app)
+        self.app = app
+        self.client = httpx.Client(app=self.app, base_url="http://testserver")
         settings.bridge_token = "test_token"
         self.headers = {"x-api-token": settings.bridge_token}
+    
+    def tearDown(self):
+        """テスト後のクリーンアップ"""
+        self.client.close()
     
     def test_mt5_direct_initialize(self):
         """MT5の直接初期化をテストする"""
