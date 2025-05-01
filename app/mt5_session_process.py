@@ -4,6 +4,7 @@ import logging
 import MetaTrader5 as mt5
 from multiprocessing import Process, Pipe
 from typing import Dict, Any, Optional
+import os
 
 # ロガーの設定
 logging.basicConfig(
@@ -28,18 +29,36 @@ class MT5SessionProcess:
         """
         self.session_id = session_id
         self.mt5_path = mt5_path
+        self.mt5_dir = os.path.dirname(mt5_path)  # MT5のディレクトリパス
         self.connection = connection
         self.initialized = False
 
     def initialize_mt5(self) -> bool:
-        """MT5の初期化"""
+        """MT5の初期化（ポータブルモード）"""
         try:
-            if not mt5.initialize(path=self.mt5_path):
-                logger.error(f"MT5初期化エラー: {mt5.last_error()}")
+            # ポータブルモードのための環境変数を設定
+            os.environ["MT5_PORTABLE_MODE"] = "1"
+            # データディレクトリをMT5ディレクトリ内に設定
+            os.environ["MT5_DATA_PATH"] = os.path.join(self.mt5_dir, "MQL5", "Data")
+            # 設定ディレクトリをMT5ディレクトリ内に設定
+            os.environ["MT5_CONFIG_PATH"] = os.path.join(self.mt5_dir, "Config")
+            
+            # MT5の初期化（ポータブルモード）
+            init_params = {
+                "path": self.mt5_path,
+                "portable": True,  # ポータブルモードを有効化
+                "timeout": 30000,  # タイムアウトを30秒に設定
+            }
+            
+            if not mt5.initialize(**init_params):
+                error = mt5.last_error()
+                logger.error(f"MT5初期化エラー: {error}")
                 return False
+                
             self.initialized = True
-            logger.info(f"MT5初期化成功 - セッション: {self.session_id}")
+            logger.info(f"MT5初期化成功（ポータブルモード） - セッション: {self.session_id}")
             return True
+            
         except Exception as e:
             logger.error(f"MT5初期化中の例外: {e}")
             return False
@@ -66,8 +85,21 @@ class MT5SessionProcess:
         
         try:
             if cmd_type == 'initialize':
-                success = self.initialize_mt5()
-                return {'success': success, 'error': None if success else str(mt5.last_error())}
+                # まずMT5を初期化
+                if not self.initialize_mt5():
+                    return {'success': False, 'error': f"MT5の初期化に失敗: {mt5.last_error()}"}
+                
+                # 次にログイン
+                if not mt5.login(
+                    login=params.get('login'),
+                    password=params.get('password'),
+                    server=params.get('server')
+                ):
+                    error = mt5.last_error()
+                    logger.error(f"MT5ログインエラー: {error}")
+                    return {'success': False, 'error': f"ログインに失敗: {error}"}
+                
+                return {'success': True, 'error': None}
             
             if not self.initialized:
                 return {'success': False, 'error': 'MT5が初期化されていません'}

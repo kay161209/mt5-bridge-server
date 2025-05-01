@@ -367,6 +367,32 @@ def check_gui_status(pid: int) -> Dict[str, Any]:
     
     return result
 
+def create_session_directory(session_id: str) -> str:
+    """セッション用のディレクトリを作成し、MT5のファイルをコピーする"""
+    try:
+        # セッション用のベースディレクトリを作成
+        base_dir = os.path.join(settings.sessions_base_path, session_id)
+        os.makedirs(base_dir, exist_ok=True)
+        
+        # MT5のポータブルインストールをコピー
+        mt5_dir = os.path.join(base_dir, "mt5")
+        if os.path.exists(mt5_dir):
+            shutil.rmtree(mt5_dir)
+            
+        # MT5のポータブルインストールディレクトリをコピー
+        shutil.copytree(settings.mt5_portable_path, mt5_dir)
+        
+        # terminal.exe のパスを返す
+        if platform.system() == "Windows":
+            terminal_exe = "terminal64.exe"
+        else:
+            terminal_exe = "terminal64"
+        
+        return os.path.join(mt5_dir, terminal_exe)
+    except Exception as e:
+        logger.error(f"セッションディレクトリの作成に失敗: {e}")
+        raise
+
 class MT5Session:
     def __init__(self, session_id: str, login: int, password: str, server: str):
         self.session_id = session_id
@@ -378,18 +404,22 @@ class MT5Session:
         self.process = None
         self.parent_conn = None
         self.child_conn = None
+        self.session_path = None
         self.initialize()
 
     def initialize(self) -> bool:
         """MT5の初期化とログイン（別プロセスで実行）"""
         try:
+            # セッション用のディレクトリを作成
+            self.session_path = create_session_directory(self.session_id)
+            
             # プロセス間通信用のパイプを作成
             self.parent_conn, self.child_conn = Pipe()
             
             # 新しいプロセスでMT5を起動
             self.process = Process(
                 target=start_session_process,
-                args=(self.session_id, settings.mt5_path, self.child_conn)
+                args=(self.session_id, self.session_path, self.child_conn)
             )
             self.process.start()
             
@@ -446,6 +476,14 @@ class MT5Session:
                 if self.process.is_alive():
                     self.process.kill()
                     
+            # セッションディレクトリの削除
+            if self.session_path:
+                session_dir = os.path.dirname(os.path.dirname(self.session_path))
+                try:
+                    shutil.rmtree(session_dir)
+                except Exception as e:
+                    logger.error(f"セッションディレクトリの削除に失敗: {e}")
+                    
         except Exception as e:
             logger.error(f"セッションクリーンアップ中のエラー: {e}")
         finally:
@@ -453,6 +491,7 @@ class MT5Session:
             self.process = None
             self.parent_conn = None
             self.child_conn = None
+            self.session_path = None
 
     def send_command(self, command: Dict[str, Any]) -> Any:
         """コマンドを子プロセスに送信"""
