@@ -133,8 +133,8 @@ class MT5SessionProcess:
                 return True
             else:
                 error = mt5.last_error()
-                error_details = get_detailed_error(error[0], error[1])
-                self.logger.error(f"MT5の初期化に失敗: {error_details}")
+                code, msg = error
+                self.logger.error(f"MT5の初期化に失敗: エラーコード {code}, メッセージ: {msg}")
                 return False
 
         except Exception as e:
