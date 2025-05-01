@@ -54,16 +54,6 @@ class MT5SessionProcess:
             logger.info(f"MT5パス: {self.mt5_path}")
             logger.info(f"MT5ディレクトリ: {self.mt5_dir}")
             
-            # ディレクトリ構造の確認
-            required_dirs = ['Config', 'MQL5', 'MQL5/Data']
-            for dir_path in required_dirs:
-                full_path = os.path.join(self.mt5_dir, dir_path)
-                exists = os.path.exists(full_path)
-                logger.info(f"ディレクトリチェック {dir_path}: {'存在します' if exists else '存在しません'}")
-                if not exists:
-                    logger.error(f"必要なディレクトリが見つかりません: {full_path}")
-                    return False
-
             # ポータブルモードのための環境変数を設定
             os.environ["MT5_PORTABLE_MODE"] = "1"
             data_path = os.path.join(self.mt5_dir, "MQL5", "Data")
