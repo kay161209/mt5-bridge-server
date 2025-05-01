@@ -379,10 +379,60 @@ def create_session_directory(session_id: str) -> str:
         # MT5のポータブルインストールをコピー
         mt5_dir = os.path.join(base_dir, "mt5")
         if os.path.exists(mt5_dir):
+            logger.info(f"既存のMT5ディレクトリを削除: {mt5_dir}")
             shutil.rmtree(mt5_dir)
             
         # MT5のポータブルインストールディレクトリをコピー
-        shutil.copytree(settings.mt5_portable_path, mt5_dir)
+        logger.info(f"MT5ポータブルをコピー: {settings.mt5_portable_path} -> {mt5_dir}")
+        shutil.copytree(
+            settings.mt5_portable_path,
+            mt5_dir,
+            symlinks=True,  # シンボリックリンクを保持
+            ignore=None,    # 全てのファイルをコピー
+            dirs_exist_ok=True  # 既存のディレクトリがあっても続行
+        )
+        
+        # 重要なディレクトリの存在確認
+        required_dirs = [
+            os.path.join(mt5_dir, "Config"),
+            os.path.join(mt5_dir, "MQL5"),
+            os.path.join(mt5_dir, "MQL5", "Data"),
+            os.path.join(mt5_dir, "MQL5", "Logs"),
+            os.path.join(mt5_dir, "MQL5", "Files"),
+            os.path.join(mt5_dir, "MQL5", "Profiles"),
+        ]
+        
+        # 必要なディレクトリが存在するか確認（作成はしない）
+        missing_dirs = []
+        for dir_path in required_dirs:
+            if not os.path.exists(dir_path):
+                missing_dirs.append(dir_path)
+                logger.warning(f"必要なディレクトリが見つかりません: {dir_path}")
+        
+        if missing_dirs:
+            logger.error("MT5ポータブルのコピーが不完全です。以下のディレクトリが不足しています:")
+            for dir_path in missing_dirs:
+                logger.error(f" - {dir_path}")
+            raise Exception("MT5ポータブルのコピーが不完全です")
+            
+        # 重要なファイルの存在確認
+        required_files = [
+            os.path.join(mt5_dir, "terminal64.exe"),
+            os.path.join(mt5_dir, "Config", "accounts.dat"),
+            os.path.join(mt5_dir, "Config", "config.ini"),
+        ]
+        
+        missing_files = []
+        for file_path in required_files:
+            if not os.path.exists(file_path):
+                missing_files.append(file_path)
+                logger.warning(f"重要なファイルが見つかりません: {file_path}")
+        
+        if missing_files:
+            logger.error("MT5ポータブルのコピーが不完全です。以下のファイルが不足しています:")
+            for file_path in missing_files:
+                logger.error(f" - {file_path}")
+            raise Exception("MT5ポータブルのコピーが不完全です")
         
         # terminal.exe のパスを返す
         if platform.system() == "Windows":
@@ -390,9 +440,18 @@ def create_session_directory(session_id: str) -> str:
         else:
             terminal_exe = "terminal64"
         
-        return os.path.join(mt5_dir, terminal_exe)
+        terminal_path = os.path.join(mt5_dir, terminal_exe)
+        logger.info(f"MT5セッションディレクトリの作成が完了: {terminal_path}")
+        return terminal_path
+        
     except Exception as e:
         logger.error(f"セッションディレクトリの作成に失敗: {e}")
+        # クリーンアップを試みる
+        try:
+            if os.path.exists(base_dir):
+                shutil.rmtree(base_dir)
+        except Exception as cleanup_error:
+            logger.error(f"クリーンアップ中にエラー: {cleanup_error}")
         raise
 
 class MT5Session:

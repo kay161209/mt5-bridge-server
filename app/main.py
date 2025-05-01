@@ -3,11 +3,14 @@ from app.session_manager import init_session_manager, get_session_manager
 from app.config import settings
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
+import logging
 
 app = FastAPI(title="MT5 Bridge API")
 
 # セッションマネージャーの初期化
 init_session_manager()
+
+logger = logging.getLogger(__name__)
 
 class SessionCreateRequest(BaseModel):
     login: int
@@ -94,4 +97,14 @@ async def delete_session(
         manager.cleanup_session(session_id)
         return {"success": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def cleanup_old_sessions():
+    """Background task to clean up expired sessions"""
+    try:
+        session_manager = get_session_manager()
+        cleaned_sessions = session_manager.cleanup_old_sessions()
+        if cleaned_sessions:
+            logger.info(f"Cleaned up {len(cleaned_sessions)} expired sessions")
+    except Exception as e:
+        logger.error(f"Session cleanup error: {e}") 
