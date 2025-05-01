@@ -9,27 +9,23 @@ import sys
 import time
 import json
 import unittest
-import asyncio
-import httpx
+import pytest
+from fastapi.testclient import TestClient
 from app.main import app
 from app.config import settings
 
-class TestMT5(unittest.TestCase):
-    def setUp(self):
+@pytest.mark.asyncio
+class TestMT5:
+    def setup_method(self):
         """テストの前準備"""
         self.app = app
-        self.base_url = "http://testserver"
-        self.client = httpx.AsyncClient(base_url=self.base_url)
+        self.client = TestClient(self.app)
         settings.bridge_token = "test_token"
         self.headers = {"x-api-token": settings.bridge_token}
     
-    async def asyncTearDown(self):
+    def teardown_method(self):
         """テスト後のクリーンアップ"""
-        await self.client.aclose()
-    
-    def tearDown(self):
-        """同期的なクリーンアップ"""
-        asyncio.run(self.asyncTearDown())
+        pass
     
     async def test_mt5_direct_initialize(self):
         """MT5の直接初期化をテストする"""
@@ -38,7 +34,7 @@ class TestMT5(unittest.TestCase):
     
     async def test_create_session(self):
         """セッション作成をテストする"""
-        response = await self.client.post(
+        response = self.client.post(
             "/v5/session/create",
             json={
                 "login": 12345,
@@ -48,23 +44,23 @@ class TestMT5(unittest.TestCase):
             headers=self.headers
         )
         
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         result = response.json()
-        self.assertTrue(result["success"])
-        self.assertIn("session_id", result)
+        assert result["success"] is True
+        assert "session_id" in result
         return result["session_id"]
     
     async def test_session_list(self):
         """セッション一覧を取得してテストする"""
-        response = await self.client.get(
+        response = self.client.get(
             "/v5/session/list",
             headers=self.headers
         )
         
-        self.assertEqual(response.status_code, 200)
+        assert response.status_code == 200
         result = response.json()
-        self.assertIn("sessions", result)
-        self.assertIsInstance(result["sessions"], dict)
+        assert "sessions" in result
+        assert isinstance(result["sessions"], dict)
     
     async def test_session_workflow(self):
         """セッションの一連の操作をテストする"""
@@ -76,7 +72,7 @@ class TestMT5(unittest.TestCase):
             await self.test_session_list()
             
             # コマンド実行
-            response = await self.client.post(
+            response = self.client.post(
                 f"/v5/session/{session_id}/command",
                 json={
                     "command": "symbols_get",
@@ -85,17 +81,17 @@ class TestMT5(unittest.TestCase):
                 headers=self.headers
             )
             
-            self.assertEqual(response.status_code, 200)
+            assert response.status_code == 200
             result = response.json()
-            self.assertTrue(result["success"])
+            assert result["success"] is True
             
         finally:
             # クリーンアップ
-            response = await self.client.delete(
+            response = self.client.delete(
                 f"/v5/session/{session_id}",
                 headers=self.headers
             )
-            self.assertEqual(response.status_code, 200)
+            assert response.status_code == 200
 
 def async_test(coro):
     def wrapper(*args, **kwargs):
