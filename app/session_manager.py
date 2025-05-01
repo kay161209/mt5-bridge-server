@@ -20,6 +20,7 @@ from pathlib import Path
 import select
 from multiprocessing import Process, Pipe
 import signal
+from app.config import settings
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
