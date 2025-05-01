@@ -63,20 +63,16 @@ class MT5SessionProcess:
             self.logger.info(f"MT5パス: {self.mt5_path}")
             self.logger.info(f"MT5ディレクトリ: {self.mt5_dir}")
 
-            # 必須ファイルの存在確認
-            required_files = [
-                self.mt5_path,  # terminal64.exe
-                os.path.join(self.mt5_dir, "Config", "terminal.ini")
-            ]
+            # 必須ファイル(terminal64.exe)の存在確認
+            if not os.path.exists(self.mt5_path):
+                raise FileNotFoundError(f"必須ファイルが見つかりません: {self.mt5_path}")
 
-            for file in required_files:
-                if not os.path.exists(file):
-                    raise FileNotFoundError(f"必須ファイルが見つかりません: {file}")
-
-            # 現在のプロセス情報をログ
+            # プロセス情報とワーキングディレクトリの設定
             self.logger.info(f"プロセスID: {os.getpid()}")
             self.logger.info(f"実行パス: {os.getcwd()}")
             self.logger.info(f"作業ディレクトリ: {self.mt5_dir}")
+            # ワーキングディレクトリをMT5実行フォルダに変更
+            os.chdir(self.mt5_dir)
 
             # 既存のMT5プロセスをチェックして終了
             mt5_processes = [p for p in psutil.process_iter(['name', 'pid', 'cmdline']) 
@@ -129,7 +125,7 @@ class MT5SessionProcess:
                 path=self.mt5_path,
                 portable=True,
                 timeout=60000,
-                config_path=os.path.join(self.mt5_dir, "Config")
+                config_path=self.mt5_dir
             ):
                 self.logger.info("MT5の初期化に成功しました")
                 terminal_info = mt5.terminal_info()
