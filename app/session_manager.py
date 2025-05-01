@@ -370,50 +370,47 @@ def check_gui_status(pid: int) -> Dict[str, Any]:
     return result
 
 def create_session_directory(session_id: str) -> str:
-    """セッション用のディレクトリを作成し、MT5のファイルをコピーする"""
+    """セッション用のMT5ディレクトリを作成し、必要なファイルをコピーする"""
     try:
-        # セッション用のベースディレクトリを作成
-        base_dir = os.path.join(settings.sessions_base_path, session_id)
-        os.makedirs(base_dir, exist_ok=True)
+        # セッションディレクトリのパスを生成
+        session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
+        mt5_dir = os.path.join(session_dir, "mt5")
         
-        # MT5のポータブルインストールをコピー
-        mt5_dir = os.path.join(base_dir, "mt5")
-        if os.path.exists(mt5_dir):
-            logger.info(f"既存のMT5ディレクトリを削除: {mt5_dir}")
-            shutil.rmtree(mt5_dir)
-            
-        # MT5のポータブルインストールディレクトリをコピー
-        logger.info(f"MT5ポータブルをコピー: {settings.mt5_portable_path} -> {mt5_dir}")
-        shutil.copytree(
-            settings.mt5_portable_path,
-            mt5_dir,
-            symlinks=True,  # シンボリックリンクを保持
-            ignore=None,    # 全てのファイルをコピー
-            dirs_exist_ok=True  # 既存のディレクトリがあっても続行
-        )
+        # ディレクトリが存在する場合は削除して再作成
+        if os.path.exists(session_dir):
+            shutil.rmtree(session_dir)
+        os.makedirs(mt5_dir)
         
-        # terminal.exe のパスを返す
-        if platform.system() == "Windows":
-            terminal_exe = "terminal64.exe"
-        else:
-            terminal_exe = "terminal64"
+        # MT5ポータブルインストールをコピー
+        logger.info(f"MT5ポータブルインストールを {settings.mt5_portable_path} から {mt5_dir} にコピーします")
+        shutil.copytree(settings.mt5_portable_path, mt5_dir, dirs_exist_ok=True)
         
-        terminal_path = os.path.join(mt5_dir, terminal_exe)
-        logger.info(f"MT5セッションディレクトリの作成が完了: {terminal_path}")
-        return terminal_path
+        # 必須ファイルの存在確認
+        required_files = [
+            "terminal64.exe",
+            os.path.join("Config", "terminal.ini")
+        ]
+        
+        for file in required_files:
+            file_path = os.path.join(mt5_dir, file)
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"必須ファイルが見つかりません: {file_path}")
+        
+        # terminal64.exeのパスを返す
+        return os.path.join(mt5_dir, "terminal64.exe")
         
     except Exception as e:
-        logger.error(f"セッションディレクトリの作成に失敗: {e}")
-        # クリーンアップを試みる
-        try:
-            if os.path.exists(base_dir):
-                shutil.rmtree(base_dir)
-        except Exception as cleanup_error:
-            logger.error(f"クリーンアップ中にエラー: {cleanup_error}")
+        logger.error(f"セッションディレクトリの作成中にエラーが発生: {str(e)}")
+        if os.path.exists(session_dir):
+            try:
+                shutil.rmtree(session_dir)
+            except Exception as cleanup_error:
+                logger.error(f"セッションディレクトリのクリーンアップ中にエラーが発生: {str(cleanup_error)}")
         raise
 
 class MT5Session:
     def __init__(self, session_id: str, login: int, password: str, server: str):
+        """MT5セッションの初期化"""
         self.session_id = session_id
         self.login = login
         self.password = password
@@ -453,8 +450,8 @@ class MT5Session:
             }
             self.parent_conn.send(init_command)
             
-            # 結果を待機
-            if self.parent_conn.poll(timeout=30):  # 30秒でタイムアウト
+            # 結果を待機（タイムアウトを60秒に延長）
+            if self.parent_conn.poll(timeout=60):  # 60秒でタイムアウト
                 result = self.parent_conn.recv()
                 if result.get("success"):
                     self.initialized = True
