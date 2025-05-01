@@ -36,21 +36,24 @@ async def create_session(
     """新しいセッションの作成"""
     check_token(x_api_token)
     
-    session_manager = get_session_manager()
-    session_id = session_manager.create_session(
-        login=req.login,
-        password=req.password,
-        server=req.server
-    )
-    
-    if not session_id:
-        raise HTTPException(status_code=500, detail="セッションの作成に失敗しました")
-    
-    return {
-        "session_id": session_id,
-        "success": True,
-        "message": "セッションが正常に作成されました"
-    }
+    try:
+        session_manager = get_session_manager()
+        session_id = session_manager.create_session(
+            login=req.login,
+            password=req.password,
+            server=req.server
+        )
+        
+        return {
+            "session_id": session_id,
+            "success": True,
+            "message": "セッションが正常に作成されました"
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"セッションの作成に失敗しました: {str(e)}"
+        )
 
 @router.post("/session/{session_id}/command")
 async def execute_command(

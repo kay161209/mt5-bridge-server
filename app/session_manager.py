@@ -376,12 +376,34 @@ class MT5Session:
         self.last_access = datetime.now()
         self.initialized = False
         self.process = None
+        self.initialize()
+
+    def initialize(self) -> bool:
+        """MT5の初期化とログイン"""
+        try:
+            if not mt5.initialize():
+                logger.error(f"MT5初期化エラー: {mt5.last_error()}")
+                return False
+                
+            if not mt5.login(login=self.login, password=self.password, server=self.server):
+                logger.error(f"MT5ログインエラー: {mt5.last_error()}")
+                mt5.shutdown()
+                return False
+                
+            self.initialized = True
+            logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"MT5初期化中の例外: {e}")
+            return False
 
     def cleanup(self):
         """セッションのクリーンアップ処理"""
         if self.process and self.process.is_alive():
             self.process.terminate()
             self.process.join(timeout=5)
+        if self.initialized:
+            mt5.shutdown()
         self.initialized = False
 
 class SessionManager:
@@ -395,7 +417,12 @@ class SessionManager:
     def create_session(self, login: int, password: str, server: str) -> str:
         """新しいセッションを作成する"""
         session_id = f"session_{len(self.sessions) + 1}"
-        self.sessions[session_id] = MT5Session(session_id, login, password, server)
+        session = MT5Session(session_id, login, password, server)
+        
+        if not session.initialized:
+            raise Exception("MT5の初期化に失敗しました")
+            
+        self.sessions[session_id] = session
         return session_id
 
     def cleanup_session(self, session_id: str) -> None:
