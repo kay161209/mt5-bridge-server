@@ -5,6 +5,7 @@ import MetaTrader5 as mt5
 from multiprocessing import Process, Pipe
 from typing import Dict, Any, Optional
 import os
+import time
 
 # ロガーの設定
 logging.basicConfig(
@@ -49,12 +50,31 @@ class MT5SessionProcess:
     def initialize_mt5(self) -> bool:
         """MT5の初期化（ポータブルモード）"""
         try:
+            logger.info(f"MT5初期化開始 - セッション: {self.session_id}")
+            logger.info(f"MT5パス: {self.mt5_path}")
+            logger.info(f"MT5ディレクトリ: {self.mt5_dir}")
+            
+            # ディレクトリ構造の確認
+            required_dirs = ['Config', 'MQL5', 'MQL5/Data']
+            for dir_path in required_dirs:
+                full_path = os.path.join(self.mt5_dir, dir_path)
+                exists = os.path.exists(full_path)
+                logger.info(f"ディレクトリチェック {dir_path}: {'存在します' if exists else '存在しません'}")
+                if not exists:
+                    logger.error(f"必要なディレクトリが見つかりません: {full_path}")
+                    return False
+
             # ポータブルモードのための環境変数を設定
             os.environ["MT5_PORTABLE_MODE"] = "1"
-            # データディレクトリをMT5ディレクトリ内に設定
-            os.environ["MT5_DATA_PATH"] = os.path.join(self.mt5_dir, "MQL5", "Data")
-            # 設定ディレクトリをMT5ディレクトリ内に設定
-            os.environ["MT5_CONFIG_PATH"] = os.path.join(self.mt5_dir, "Config")
+            data_path = os.path.join(self.mt5_dir, "MQL5", "Data")
+            config_path = os.path.join(self.mt5_dir, "Config")
+            os.environ["MT5_DATA_PATH"] = data_path
+            os.environ["MT5_CONFIG_PATH"] = config_path
+            
+            logger.info(f"環境変数設定:")
+            logger.info(f"MT5_PORTABLE_MODE: {os.environ.get('MT5_PORTABLE_MODE')}")
+            logger.info(f"MT5_DATA_PATH: {os.environ.get('MT5_DATA_PATH')}")
+            logger.info(f"MT5_CONFIG_PATH: {os.environ.get('MT5_CONFIG_PATH')}")
             
             # MT5の初期化（ポータブルモード）
             init_params = {
@@ -63,25 +83,55 @@ class MT5SessionProcess:
                 "timeout": 30000,  # タイムアウトを30秒に設定
             }
             
+            logger.info(f"MT5初期化パラメータ: {init_params}")
+            
             if not mt5.initialize(**init_params):
                 error = mt5.last_error()
-                logger.error(f"MT5初期化エラー: {error}")
+                error_code, error_msg = error if isinstance(error, tuple) else (0, str(error))
+                logger.error(f"MT5初期化エラー: [{error_code}] {error_msg}")
                 return False
                 
             self.initialized = True
             logger.info(f"MT5初期化成功（ポータブルモード） - セッション: {self.session_id}")
+            
+            # 初期化後の状態確認
+            terminal_info = mt5.terminal_info()
+            if terminal_info is not None:
+                logger.info("ターミナル情報:")
+                logger.info(f"  接続状態: {terminal_info.connected}")
+                logger.info(f"  DLLバージョン: {terminal_info.version}")
+                logger.info(f"  ディレクトリ: {terminal_info.path}")
+                logger.info(f"  データディレクトリ: {terminal_info.data_path}")
+                logger.info(f"  コモンディレクトリ: {terminal_info.commondata_path}")
+            
             return True
             
         except Exception as e:
-            logger.error(f"MT5初期化中の例外: {e}")
+            logger.error(f"MT5初期化中の例外: {e}", exc_info=True)
             return False
 
     def cleanup(self):
         """MT5接続のクリーンアップ"""
-        if self.initialized:
-            mt5.shutdown()
-            self.initialized = False
-            logger.info(f"MT5シャットダウン完了 - セッション: {self.session_id}")
+        try:
+            if self.initialized:
+                logger.info(f"MT5シャットダウン開始 - セッション: {self.session_id}")
+                mt5.shutdown()
+                self.initialized = False
+                logger.info(f"MT5シャットダウン完了 - セッション: {self.session_id}")
+                
+                # ログハンドラをクリーンアップ
+                for handler in logger.handlers[:]:
+                    try:
+                        handler.close()
+                        logger.removeHandler(handler)
+                    except Exception as e:
+                        logger.error(f"ログハンドラのクリーンアップ中にエラー: {e}")
+                
+                # 少し待機してファイルハンドルが解放されるのを待つ
+                time.sleep(1)
+                
+        except Exception as e:
+            logger.error(f"クリーンアップ中にエラー: {e}", exc_info=True)
 
     def handle_command(self, command: Dict[str, Any]) -> Dict[str, Any]:
         """
