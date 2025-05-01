@@ -86,24 +86,42 @@ class MT5SessionProcess:
                 self.logger.info(f"既存のMT5プロセスを確認中: {len(mt5_processes)}個")
                 for proc in mt5_processes:
                     try:
-                        cmd_line = proc.info.get('cmdline', [])
-                        proc_path = cmd_line[0] if cmd_line else "不明"
-                        self.logger.info(f"既存のプロセス - PID: {proc.info['pid']}, パス: {proc_path}")
+                        # プロセスの詳細情報を取得
+                        proc_info = proc.as_dict(attrs=['pid', 'name', 'cmdline', 'create_time'])
+                        self.logger.info(f"既存のプロセス情報:")
+                        self.logger.info(f"  - PID: {proc_info['pid']}")
+                        self.logger.info(f"  - 名前: {proc_info['name']}")
+                        self.logger.info(f"  - コマンドライン: {proc_info.get('cmdline', ['不明'])}")
                         
-                        # 同じパスのプロセスが存在する場合は終了を試みる
-                        if proc_path == self.mt5_path:
-                            self.logger.warning(f"同じパスのMT5プロセスを終了します: PID {proc.info['pid']}")
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=10)  # 10秒待機
-                            except psutil.TimeoutExpired:
-                                self.logger.warning(f"プロセスの終了待機がタイムアウト: PID {proc.info['pid']}")
-                                proc.kill()  # 強制終了
+                        # プロセスを終了
+                        self.logger.info(f"MT5プロセスを終了します: PID {proc_info['pid']}")
+                        proc.terminate()
+                        
+                        # 終了を待機（最大10秒）
+                        try:
+                            proc.wait(timeout=10)
+                            self.logger.info(f"プロセスが正常に終了しました: PID {proc_info['pid']}")
+                        except psutil.TimeoutExpired:
+                            self.logger.warning(f"プロセスの終了待機がタイムアウト。強制終了を試みます: PID {proc_info['pid']}")
+                            proc.kill()
+                            proc.wait(timeout=5)  # 強制終了の完了を待機
+                            
                     except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                        self.logger.warning(f"プロセス情報の取得に失敗: {e}")
+                        self.logger.warning(f"プロセス操作中にエラー: {e}")
+                    except Exception as e:
+                        self.logger.error(f"予期せぬエラー: {e}", exc_info=True)
 
             # 少し待機してプロセスが完全に終了するのを待つ
-            time.sleep(2)
+            self.logger.info("既存プロセスの終了を待機中...")
+            time.sleep(3)
+
+            # 再度プロセスをチェック
+            remaining_processes = [p for p in psutil.process_iter(['name']) 
+                                if p.info['name'] and 'terminal64' in p.info['name'].lower()]
+            if remaining_processes:
+                self.logger.warning(f"まだ {len(remaining_processes)} 個のMT5プロセスが実行中です")
+                for proc in remaining_processes:
+                    self.logger.warning(f"残存プロセス - PID: {proc.pid}")
 
             # MT5の初期化を試行
             self.logger.info("MT5の初期化を開始します...")
