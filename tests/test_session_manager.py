@@ -5,108 +5,87 @@
 import os
 import sys
 import time
-import pytest
-import logging
-from pathlib import Path
+import unittest
 from datetime import datetime, timedelta
+from app.session_manager import SessionManager, init_session_manager
 
-from app.session_manager import SessionManager
-
-# テスト用のロギング設定
-logger = logging.getLogger(__name__)
-
-def test_session_manager_initialization(session_manager):
-    """セッションマネージャーの初期化をテストする"""
-    assert session_manager is not None, "セッションマネージャーが初期化されていません"
-    assert isinstance(session_manager, SessionManager), "セッションマネージャーのインスタンスタイプが正しくありません"
-
-def test_create_new_session(session_manager, test_config):
-    """新しいセッションの作成をテストする"""
-    session_id = session_manager.create_session(
-        login=test_config["mt5_login"],
-        password=test_config["mt5_password"],
-        server=test_config["mt5_server"]
-    )
+class TestSessionManager(unittest.TestCase):
+    def setUp(self):
+        """テストの前準備"""
+        self.test_config = {
+            "mt5_login": 12345,
+            "mt5_password": "test_password",
+            "mt5_server": "test_server"
+        }
+        init_session_manager(base_path="./test_data", portable_mt5_path="path/to/test/mt5")
+        self.session_manager = SessionManager()
     
-    assert session_id is not None, "セッションIDが生成されませんでした"
-    assert session_manager.get_session(session_id) is not None, "作成したセッションが取得できません"
+    def tearDown(self):
+        """テスト後のクリーンアップ"""
+        self.session_manager.cleanup()
     
-    return session_id
-
-def test_get_session(session_manager, test_config):
-    """セッションの取得をテストする"""
-    # セッションを作成
-    session_id = test_create_new_session(session_manager, test_config)
+    def test_session_manager_initialization(self):
+        """セッションマネージャーの初期化をテストする"""
+        self.assertIsNotNone(self.session_manager)
+        self.assertIsInstance(self.session_manager, SessionManager)
     
-    # セッションを取得
-    session = session_manager.get_session(session_id)
-    assert session is not None, "セッションが見つかりません"
-    assert session.login == test_config["mt5_login"], "ログインIDが一致しません"
-    assert session.server == test_config["mt5_server"], "サーバーが一致しません"
-
-def test_list_sessions(session_manager, test_config):
-    """セッション一覧の取得をテストする"""
-    # セッションを作成
-    session_id = test_create_new_session(session_manager, test_config)
-    
-    # セッション一覧を取得
-    sessions = session_manager.list_sessions()
-    assert isinstance(sessions, dict), "セッション一覧が辞書形式ではありません"
-    assert session_id in sessions, "作成したセッションが一覧に含まれていません"
-    
-    session = sessions[session_id]
-    assert session["login"] == test_config["mt5_login"], "ログインIDが一致しません"
-    assert session["server"] == test_config["mt5_server"], "サーバーが一致しません"
-
-def test_cleanup_old_sessions(session_manager, test_config):
-    """古いセッションのクリーンアップをテストする"""
-    # セッションを作成
-    session_id = test_create_new_session(session_manager, test_config)
-    
-    # セッションの最終アクセス時間を更新
-    session = session_manager.get_session(session_id)
-    session.last_access = datetime.now() - timedelta(hours=2)
-    
-    # クリーンアップを実行
-    cleaned_sessions = session_manager.cleanup_old_sessions()
-    assert session_id in cleaned_sessions, "古いセッションがクリーンアップされていません"
-    assert session_manager.get_session(session_id) is None, "クリーンアップ後もセッションが残っています"
-
-def test_session_command_execution(session_manager, test_config):
-    """セッションでのコマンド実行をテストする"""
-    # セッションを作成
-    session_id = test_create_new_session(session_manager, test_config)
-    
-    # シンボル情報取得コマンドを実行
-    result = session_manager.execute_command(
-        session_id=session_id,
-        command="symbols_get",
-        params={}
-    )
-    
-    assert result is not None, "コマンド実行結果がありません"
-    assert isinstance(result, list), "シンボル情報がリスト形式ではありません"
-    assert len(result) > 0, "シンボル情報が空です"
-
-@pytest.mark.integration
-def test_session_manager_workflow(session_manager, test_config):
-    """セッションマネージャーの一連の操作をテストする"""
-    # セッションマネージャーの初期化確認
-    test_session_manager_initialization(session_manager)
-    
-    # セッション作成
-    session_id = test_create_new_session(session_manager, test_config)
-    
-    try:
-        # セッション取得
-        test_get_session(session_manager, test_config)
+    def test_create_new_session(self):
+        """新しいセッションの作成をテストする"""
+        session_id = self.session_manager.create_session(
+            login=self.test_config["mt5_login"],
+            password=self.test_config["mt5_password"],
+            server=self.test_config["mt5_server"]
+        )
         
-        # セッション一覧
-        test_list_sessions(session_manager, test_config)
-        
-        # コマンド実行
-        test_session_command_execution(session_manager, test_config)
+        self.assertIsNotNone(session_id)
+        self.assertIsNotNone(self.session_manager.get_session(session_id))
+        return session_id
     
-    finally:
-        # セッションのクリーンアップ
-        session_manager.cleanup_session(session_id) 
+    def test_get_session(self):
+        """セッションの取得をテストする"""
+        session_id = self.test_create_new_session()
+        
+        session = self.session_manager.get_session(session_id)
+        self.assertIsNotNone(session)
+        self.assertEqual(session.login, self.test_config["mt5_login"])
+        self.assertEqual(session.server, self.test_config["mt5_server"])
+    
+    def test_list_sessions(self):
+        """セッション一覧の取得をテストする"""
+        session_id = self.test_create_new_session()
+        
+        sessions = self.session_manager.list_sessions()
+        self.assertIsInstance(sessions, dict)
+        self.assertIn(session_id, sessions)
+        
+        session = sessions[session_id]
+        self.assertEqual(session["login"], self.test_config["mt5_login"])
+        self.assertEqual(session["server"], self.test_config["mt5_server"])
+    
+    def test_cleanup_old_sessions(self):
+        """古いセッションのクリーンアップをテストする"""
+        session_id = self.test_create_new_session()
+        
+        session = self.session_manager.get_session(session_id)
+        session.last_access = datetime.now() - timedelta(hours=2)
+        
+        cleaned_sessions = self.session_manager.cleanup_old_sessions()
+        self.assertIn(session_id, cleaned_sessions)
+        self.assertIsNone(self.session_manager.get_session(session_id))
+    
+    def test_session_command_execution(self):
+        """セッションでのコマンド実行をテストする"""
+        session_id = self.test_create_new_session()
+        
+        result = self.session_manager.execute_command(
+            session_id=session_id,
+            command="symbols_get",
+            params={}
+        )
+        
+        self.assertIsNotNone(result)
+        self.assertIsInstance(result, list)
+        self.assertGreater(len(result), 0)
+
+if __name__ == '__main__':
+    unittest.main() 
