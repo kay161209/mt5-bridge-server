@@ -21,6 +21,7 @@ import select
 from multiprocessing import Process, Pipe
 import signal
 from app.config import settings
+from app.mt5_session_process import start_session_process
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
