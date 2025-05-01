@@ -376,14 +376,33 @@ def create_session_directory(session_id: str) -> str:
         session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
         mt5_dir = os.path.join(session_dir, "mt5")
         
-        # ディレクトリが存在する場合は削除して再作成
+        # ディレクトリが存在する場合は削除して再作成（PermissionError時は再試行）
         if os.path.exists(session_dir):
-            shutil.rmtree(session_dir)
+            try:
+                shutil.rmtree(session_dir)
+            except Exception as e:
+                # Windowsのファイルロック時は待機して再試行
+                if hasattr(e, 'winerror') and e.winerror == 32:
+                    logger.warning(f"セッションディレクトリが使用中のため削除を待機します: {session_dir}, {e}")
+                    time.sleep(2)
+                    try:
+                        shutil.rmtree(session_dir)
+                    except Exception as e2:
+                        logger.error(f"セッションディレクトリの再削除に失敗: {e2}")
+                        raise
+                else:
+                    raise
         os.makedirs(mt5_dir)
         
         # MT5ポータブルインストールをコピー
         logger.info(f"MT5ポータブルインストールを {settings.mt5_portable_path} から {mt5_dir} にコピーします")
         shutil.copytree(settings.mt5_portable_path, mt5_dir, dirs_exist_ok=True)
+        # アカウント情報のチェック
+        accounts_src = os.path.join(settings.mt5_portable_path, 'accounts.dat')
+        if os.path.exists(accounts_src):
+            shutil.copy2(accounts_src, os.path.join(mt5_dir, 'accounts.dat'))
+        else:
+            logger.warning(f"アカウント情報 (accounts.dat) が見つかりません: {accounts_src}。自動ログインはできません。")
         
         # 必須ファイルの存在確認
         required_files = [
@@ -527,7 +546,16 @@ class MT5Session:
                 try:
                     shutil.rmtree(session_dir)
                 except Exception as e:
-                    logger.error(f"セッションディレクトリの削除に失敗: {e}")
+                    # Windowsのファイルロック時は待機して再試行
+                    if hasattr(e, 'winerror') and e.winerror == 32:
+                        logger.warning(f"ログファイルがまだ使用中です。数秒待機して再試行します: {e}")
+                        time.sleep(3)
+                        try:
+                            shutil.rmtree(session_dir)
+                        except Exception as e2:
+                            logger.error(f"セッションディレクトリの再削除に失敗: {e2}")
+                    else:
+                        logger.error(f"セッションディレクトリの削除に失敗: {e}")
                     
         except Exception as e:
             logger.error(f"セッションクリーンアップ中のエラー: {e}")
