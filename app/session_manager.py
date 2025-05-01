@@ -537,29 +537,49 @@ class MT5Session:
             if self.child_conn:
                 self.child_conn.close()
                 
-            if self.process and self.process.is_alive():
-                self.process.terminate()
-                self.process.join(timeout=5)
+            # 子プロセスの終了を待機
+            if self.process:
+                # 最大10秒待って終了
+                self.process.join(timeout=10)
                 if self.process.is_alive():
-                    self.process.kill()
-                    
-            # セッションディレクトリの削除
+                    logger.warning(f"子プロセスが停止しないため強制終了: PID {self.process.pid}")
+                    self.process.terminate()
+                    self.process.join(timeout=5)
+                    if self.process.is_alive():
+                        logger.warning(f"子プロセスがまだ残存しているためkill: PID {self.process.pid}")
+                        self.process.kill()
+
+            # 対応するterminal64プロセスが残っていれば終了
+            if self.session_path:
+                try:
+                    for proc in psutil.process_iter(['pid', 'exe']):
+                        exe = proc.info.get('exe') or ''
+                        if os.path.normcase(exe) == os.path.normcase(self.session_path):
+                            logger.info(f"ターミナルプロセスを終了します: PID {proc.pid}")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                logger.warning(f"ターミナルプロセス終了タイムアウト、kill: PID {proc.pid}")
+                                proc.kill()
+                except Exception as e:
+                    logger.warning(f"terminal64プロセス終了時にエラー: {e}")
+            
+            # セッションディレクトリの削除（最大3回までPermissionErrorリトライ）
             if self.session_path:
                 session_dir = os.path.dirname(os.path.dirname(self.session_path))
-                try:
-                    shutil.rmtree(session_dir)
-                except Exception as e:
-                    # Windowsのファイルロック時は待機して再試行
-                    if hasattr(e, 'winerror') and e.winerror == 32:
-                        logger.warning(f"ログファイルがまだ使用中です。数秒待機して再試行します: {e}")
-                        time.sleep(3)
-                        try:
-                            shutil.rmtree(session_dir)
-                        except Exception as e2:
-                            logger.error(f"セッションディレクトリの再削除に失敗: {e2}")
-                    else:
-                        logger.error(f"セッションディレクトリの削除に失敗: {e}")
-                    
+                for attempt in range(3):
+                    try:
+                        shutil.rmtree(session_dir)
+                        break
+                    except PermissionError as e:
+                        logger.warning(f"ファイル/ディレクトリが使用中のため再試行します ({attempt+1}/3): {e}")
+                        time.sleep(2)
+                    except Exception as e:
+                        logger.error(f"セッションディレクトリの削除時に予期せぬエラー: {e}", exc_info=True)
+                        break
+                else:
+                    logger.error(f"セッションディレクトリの削除に失敗しました: {session_dir}")
         except Exception as e:
             logger.error(f"セッションクリーンアップ中のエラー: {e}")
         finally:
