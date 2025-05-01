@@ -36,18 +36,44 @@ def check_env_var(env_var, default=None, var_type=str):
             return default
         return None
 
+# アプリケーションのルートディレクトリを取得
+root_dir = os.path.dirname(os.path.dirname(__file__))
+
+# MT5のポータブルインストールパス
+mt5_portable_path = os.path.join(root_dir, "MetaTrader5-Portable")
+
+# セッションのベースパス
+sessions_base_path = os.path.join(root_dir, "mt5-sessions")
+
+# ログディレクトリ
+logs_dir = os.path.join(root_dir, "logs")
+
+# 設定をログ出力用の辞書として保持
+settings_dict = {
+    "mt5_portable_path": mt5_portable_path,
+    "sessions_base_path": sessions_base_path,
+    "logs_dir": logs_dir
+}
+
+# 設定をグローバル変数として公開
+settings = type("Settings", (), settings_dict)()
+
+# 必要なディレクトリを作成
+os.makedirs(sessions_base_path, exist_ok=True)
+os.makedirs(logs_dir, exist_ok=True)
+
 class Settings(BaseSettings):
     # API認証設定
     bridge_token: str = "development_token"
     
     # MT5設定
-    mt5_portable_path: str = r"C:\MetaTrader5-Portable"  # ポータブルモードのMT5がインストールされているディレクトリ
+    mt5_portable_path: str = mt5_portable_path
     mt5_login: int = 0
     mt5_password: str = ""
     mt5_server: str = ""
     
     # セッション管理設定
-    sessions_base_path: str = r"C:\mt5-sessions"  # 各セッション用のMT5コピーが作成されるディレクトリ
+    sessions_base_path: str = sessions_base_path
     session_inactive_timeout: int = 3600
     cleanup_interval: int = 60
     max_session_age_hours: int = 24
