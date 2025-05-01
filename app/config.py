@@ -38,7 +38,7 @@ def check_env_var(env_var, default=None, var_type=str):
 
 class Settings(BaseSettings):
     # API認証設定
-    bridge_token: str = "default_token"
+    bridge_token: str = "development_token"
     
     # MT5設定
     mt5_path: str = r"C:\Program Files\MetaTrader 5\terminal64.exe"
