@@ -12,6 +12,8 @@ from app.session_manager import SessionManager, MT5Session
 class TestSessionManager(unittest.TestCase):
     def setUp(self):
         """テストの前準備"""
+        from app.session_manager import init_session_manager
+        init_session_manager()  # セッションマネージャーを初期化
         self.manager = SessionManager()
         self.test_login = 12345
         self.test_password = "test_password"
