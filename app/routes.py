@@ -96,7 +96,7 @@ def list_sessions(x_api_token: str | None = Header(None)):
     check_token(x_api_token)
     
     session_manager = get_session_manager()
-    return {"sessions": session_manager.get_all_sessions()}
+    return {"sessions": session_manager.list_sessions()}
 
 @router.delete("/session")
 def close_all_sessions(x_api_token: str | None = Header(None), background_tasks: BackgroundTasks = None):

@@ -614,7 +614,8 @@ class SessionManager:
 
     def create_session(self, login: int, password: str, server: str) -> str:
         """新しいセッションを作成する"""
-        session_id = f"session_{len(self.sessions) + 1}"
+        # セッションIDをSHA256ハッシュで生成
+        session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
         session = MT5Session(session_id, login, password, server)
         
         if not session.initialized:

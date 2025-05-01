@@ -129,6 +129,17 @@ class MT5SessionProcess:
                 result = mt5.positions_get(**params)
                 return {'success': True, 'result': [pos._asdict() for pos in result] if result else []}
             
+            elif cmd_type == 'symbol_select':
+                # シンボルをマーケットウォッチに追加/削除
+                symbol = params.get('symbol')
+                enable = params.get('enable', True)
+                res = mt5.symbol_select(symbol, enable)
+                if res:
+                    return {'success': True, 'result': None}
+                else:
+                    error = mt5.last_error()
+                    return {'success': False, 'error': f"symbol_selectに失敗: {error}"}
+            
             return {'success': False, 'error': f'不明なコマンド: {cmd_type}'}
             
         except Exception as e:
