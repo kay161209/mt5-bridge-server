@@ -376,35 +376,98 @@ class MT5Session:
         self.last_access = datetime.now()
         self.initialized = False
         self.process = None
+        self.parent_conn = None
+        self.child_conn = None
         self.initialize()
 
     def initialize(self) -> bool:
-        """MT5の初期化とログイン"""
+        """MT5の初期化とログイン（別プロセスで実行）"""
         try:
-            if not mt5.initialize():
-                logger.error(f"MT5初期化エラー: {mt5.last_error()}")
+            # プロセス間通信用のパイプを作成
+            self.parent_conn, self.child_conn = Pipe()
+            
+            # 新しいプロセスでMT5を起動
+            self.process = Process(
+                target=start_session_process,
+                args=(self.session_id, settings.mt5_path, self.child_conn)
+            )
+            self.process.start()
+            
+            # 初期化コマンドを送信
+            init_command = {
+                "type": "initialize",
+                "params": {
+                    "login": self.login,
+                    "password": self.password,
+                    "server": self.server
+                }
+            }
+            self.parent_conn.send(init_command)
+            
+            # 結果を待機
+            if self.parent_conn.poll(timeout=30):  # 30秒でタイムアウト
+                result = self.parent_conn.recv()
+                if result.get("success"):
+                    self.initialized = True
+                    logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
+                    return True
+                else:
+                    error_msg = result.get("error", "不明なエラー")
+                    logger.error(f"MT5初期化エラー: {error_msg}")
+                    self.cleanup()
+                    return False
+            else:
+                logger.error("MT5初期化がタイムアウトしました")
+                self.cleanup()
                 return False
                 
-            if not mt5.login(login=self.login, password=self.password, server=self.server):
-                logger.error(f"MT5ログインエラー: {mt5.last_error()}")
-                mt5.shutdown()
-                return False
-                
-            self.initialized = True
-            logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
-            return True
         except Exception as e:
             logger.error(f"MT5初期化中の例外: {e}")
+            self.cleanup()
             return False
 
     def cleanup(self):
         """セッションのクリーンアップ処理"""
-        if self.process and self.process.is_alive():
-            self.process.terminate()
-            self.process.join(timeout=5)
-        if self.initialized:
-            mt5.shutdown()
-        self.initialized = False
+        try:
+            if self.parent_conn:
+                # 終了コマンドを送信
+                try:
+                    self.parent_conn.send({"type": "terminate"})
+                except:
+                    pass
+                self.parent_conn.close()
+                
+            if self.child_conn:
+                self.child_conn.close()
+                
+            if self.process and self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=5)
+                if self.process.is_alive():
+                    self.process.kill()
+                    
+        except Exception as e:
+            logger.error(f"セッションクリーンアップ中のエラー: {e}")
+        finally:
+            self.initialized = False
+            self.process = None
+            self.parent_conn = None
+            self.child_conn = None
+
+    def send_command(self, command: Dict[str, Any]) -> Any:
+        """コマンドを子プロセスに送信"""
+        if not self.initialized or not self.parent_conn:
+            raise Exception("セッションが初期化されていないか、すでに終了しています")
+            
+        try:
+            self.parent_conn.send(command)
+            if self.parent_conn.poll(timeout=30):  # 30秒でタイムアウト
+                return self.parent_conn.recv()
+            else:
+                raise Exception("コマンド実行がタイムアウトしました")
+        except Exception as e:
+            logger.error(f"コマンド送信中のエラー: {e}")
+            raise
 
 class SessionManager:
     def __init__(self):
@@ -457,12 +520,14 @@ class SessionManager:
     def execute_command(self, session_id: str, command: str, params: Dict[str, Any]) -> Any:
         """セッションでコマンドを実行する"""
         session = self.get_session(session_id)
-        if session:
-            session.last_access = datetime.now()
-            # ここではダミーのシンボル情報を返す（テスト用）
-            if command == "symbols_get":
-                return [{"name": "EURUSD", "digits": 5}, {"name": "USDJPY", "digits": 3}]
-        return None
+        if not session:
+            raise Exception(f"セッション {session_id} が見つかりません")
+            
+        session.last_access = datetime.now()
+        return session.send_command({
+            "type": command,
+            "params": params
+        })
 
     def cleanup(self) -> None:
         """全セッションをクリーンアップする"""
