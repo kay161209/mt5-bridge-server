@@ -39,14 +39,18 @@ def check_env_var(env_var, default=None, var_type=str):
 # アプリケーションのルートディレクトリを取得
 root_dir = os.path.dirname(os.path.dirname(__file__))
 
-# MT5のポータブルインストールパス
-mt5_portable_path = os.path.join(root_dir, "MetaTrader5-Portable")
+# MT5のポータブルインストールパス（環境変数から取得）
+mt5_portable_path = os.getenv('MT5_PORTABLE_PATH', os.path.join(root_dir, "MetaTrader5-Portable"))
+if not os.path.exists(mt5_portable_path):
+    logger.warning(f"MT5ポータブルインストールパスが見つかりません: {mt5_portable_path}")
+    logger.warning("環境変数 MT5_PORTABLE_PATH で正しいパスを設定してください")
+    raise FileNotFoundError(f"MT5ポータブルインストールが見つかりません: {mt5_portable_path}")
 
-# セッションのベースパス
-sessions_base_path = os.path.join(root_dir, "mt5-sessions")
+# セッションのベースパス（環境変数から取得可能）
+sessions_base_path = os.getenv('MT5_SESSIONS_PATH', os.path.join(root_dir, "mt5-sessions"))
 
-# ログディレクトリ
-logs_dir = os.path.join(root_dir, "logs")
+# ログディレクトリ（環境変数から取得可能）
+logs_dir = os.getenv('MT5_LOGS_DIR', os.path.join(root_dir, "logs"))
 
 # 設定をログ出力用の辞書として保持
 settings_dict = {
@@ -55,8 +59,10 @@ settings_dict = {
     "logs_dir": logs_dir
 }
 
-# 設定をグローバル変数として公開
-settings = type("Settings", (), settings_dict)()
+# パスの存在確認と作成
+logger.info(f"MT5ポータブルインストールパス: {mt5_portable_path}")
+logger.info(f"セッションベースパス: {sessions_base_path}")
+logger.info(f"ログディレクトリ: {logs_dir}")
 
 # 必要なディレクトリを作成
 os.makedirs(sessions_base_path, exist_ok=True)
@@ -95,8 +101,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # 設定値のログ出力（デバッグ用）
-logger.debug(f"設定を読み込みました:")
-logger.debug(f"  - bridge_token: {settings.bridge_token}")
-logger.debug(f"  - mt5_portable_path: {settings.mt5_portable_path}")
-logger.debug(f"  - sessions_base_path: {settings.sessions_base_path}")
-logger.debug(f"  - log_level: {settings.log_level}")
+logger.info("設定を読み込みました:")
+logger.info(f"  - MT5ポータブルインストールパス: {settings.mt5_portable_path}")
+logger.info(f"  - セッションベースパス: {settings.sessions_base_path}")
+logger.info(f"  - ログレベル: {settings.log_level}")
