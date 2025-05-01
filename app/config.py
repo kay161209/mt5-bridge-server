@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     mt5_server: str = ""
     
     # セッション管理設定
-    sessions_base_path: str = os.path.join(os.path.expanduser("~"), ".mt5-sessions")  # 各セッション用のMT5コピーが作成されるディレクトリ
+    sessions_base_path: str = r"C:\mt5-sessions"  # 各セッション用のMT5コピーが作成されるディレクトリ
     session_inactive_timeout: int = 3600
     cleanup_interval: int = 60
     max_session_age_hours: int = 24
