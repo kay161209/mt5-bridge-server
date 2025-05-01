@@ -28,18 +28,29 @@ def check_token(x_api_token: str | None = Header(None)):
 
 # ----- セッション管理エンドポイント ----- #
 
-@router.post("/session/create")
-async def create_session(x_api_token: str | None = Header(None)):
+@router.post("/session/create", response_model=SessionCreateResponse)
+async def create_session(
+    req: SessionCreateRequest,
+    x_api_token: str | None = Header(None)
+):
     """新しいセッションの作成"""
     check_token(x_api_token)
     
     session_manager = get_session_manager()
-    session_id = session_manager.create_session()
+    session_id = session_manager.create_session(
+        login=req.login,
+        password=req.password,
+        server=req.server
+    )
     
     if not session_id:
         raise HTTPException(status_code=500, detail="セッションの作成に失敗しました")
     
-    return {"session_id": session_id}
+    return {
+        "session_id": session_id,
+        "success": True,
+        "message": "セッションが正常に作成されました"
+    }
 
 @router.post("/session/{session_id}/command")
 async def execute_command(
