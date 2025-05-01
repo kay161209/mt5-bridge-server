@@ -11,8 +11,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(f'logs/mt5_session_{id}.log'),
-        logging.StreamHandler()
+        logging.StreamHandler()  # 標準出力へのハンドラ
     ]
 )
 logger = logging.getLogger(__name__)
@@ -32,6 +31,20 @@ class MT5SessionProcess:
         self.mt5_dir = os.path.dirname(mt5_path)  # MT5のディレクトリパス
         self.connection = connection
         self.initialized = False
+        
+        # セッション固有のファイルハンドラを追加
+        try:
+            os.makedirs('logs', exist_ok=True)
+            file_handler = logging.FileHandler(
+                os.path.join('logs', f'mt5_session_{self.session_id}.log'),
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            )
+            logger.addHandler(file_handler)
+        except Exception as e:
+            logger.error(f"ログファイルハンドラの設定に失敗: {e}")
 
     def initialize_mt5(self) -> bool:
         """MT5の初期化（ポータブルモード）"""
