@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 import os
 import time
 import psutil
+from datetime import datetime
 
 # ロガーの設定
 logging.basicConfig(
@@ -139,6 +140,39 @@ class MT5SessionProcess:
                 else:
                     error = mt5.last_error()
                     return {'success': False, 'error': f"symbol_selectに失敗: {error}"}
+            
+            elif cmd_type == 'candles':
+                # ローソク足データを取得
+                symbol = params.get('symbol')
+                timeframe = params.get('timeframe')
+                count = params.get('count', 100)
+                start_time = params.get('start_time')
+                # タイムフレーム文字列を定数に変換
+                tf_map = {
+                    'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
+                    'M30': mt5.TIMEFRAME_M30, 'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4,
+                    'D1': mt5.TIMEFRAME_D1, 'W1': mt5.TIMEFRAME_W1, 'MN1': mt5.TIMEFRAME_MN1
+                }
+                tf = tf_map.get(timeframe.upper()) if timeframe else None
+                if tf is None:
+                    return {'success': False, 'error': f'不正なタイムフレーム: {timeframe}'}
+                # データ取得
+                if start_time:
+                    rates = mt5.copy_rates_from(symbol, tf, start_time, count)
+                else:
+                    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+                if rates is None or len(rates) == 0:
+                    return {'success': True, 'result': []}
+                # データ整形
+                result = []
+                for r in rates:
+                    result.append({
+                        'time': datetime.fromtimestamp(r['time']).isoformat(),
+                        'open': r['open'], 'high': r['high'],
+                        'low': r['low'], 'close': r['close'],
+                        'tick_volume': r['tick_volume']
+                    })
+                return {'success': True, 'result': result}
             
             return {'success': False, 'error': f'不明なコマンド: {cmd_type}'}
             

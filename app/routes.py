@@ -146,25 +146,27 @@ def session_quote(session_id: str, symbol: str, x_api_token: str | None = Header
     
     return mt5.get_price(symbol)
 
-@router.post("/{session_id}/candles", response_model=CandleResponse)
+@router.post("/session/{session_id}/candles", response_model=CandleResponse)
 def session_get_candles(session_id: str, req: CandleRequest, x_api_token: str | None = Header(None)):
     """指定セッションでローソク足データを取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    try:
-        session_manager = get_session_manager()
-        session_manager.get_session(session_id)
-    except KeyError:
+    session = get_session_manager().get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
-    
-    candles = mt5.get_candles(
-        symbol=req.symbol,
-        timeframe=req.timeframe,
-        count=req.count,
-        start_time=req.start_time
-    )
-    return {"data": candles}
+    # コマンド送信
+    params: Dict[str, Any] = {
+        "symbol": req.symbol,
+        "timeframe": req.timeframe,
+        "count": req.count
+    }
+    if req.start_time:
+        params["start_time"] = req.start_time
+    result = session.send_command({"type": "candles", "params": params})
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("error"))
+    return {"data": result.get("result")}
 
 # 他のセッションエンドポイントはここに追加...
 

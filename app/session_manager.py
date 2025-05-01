@@ -651,11 +651,15 @@ class SessionManager:
 
     def list_sessions(self) -> Dict[str, Dict[str, Any]]:
         """全セッションの情報を取得する"""
+        now = datetime.now()
         return {
             session_id: {
+                "id": session_id,
                 "login": session.login,
                 "server": session.server,
-                "last_access": session.last_access.isoformat()
+                "created_at": session.created_at.isoformat(),
+                "last_accessed": session.last_access.isoformat(),
+                "age_seconds": (now - session.last_access).total_seconds()
             }
             for session_id, session in self.sessions.items()
         }
@@ -676,6 +680,12 @@ class SessionManager:
         """全セッションをクリーンアップする"""
         for session_id in list(self.sessions.keys()):
             self.cleanup_session(session_id)
+
+    def close_all_sessions(self) -> int:
+        """全セッションを終了し、終了したセッション数を返す"""
+        count = len(self.sessions)
+        self.cleanup()
+        return count
 
 _session_manager: Optional[SessionManager] = None
 
