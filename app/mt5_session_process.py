@@ -78,15 +78,35 @@ class MT5SessionProcess:
             self.logger.info(f"実行パス: {os.getcwd()}")
             self.logger.info(f"作業ディレクトリ: {self.mt5_dir}")
 
-            # 既存のMT5プロセスをチェック
-            mt5_processes = [p for p in psutil.process_iter(['name']) 
+            # 既存のMT5プロセスをチェックして終了
+            mt5_processes = [p for p in psutil.process_iter(['name', 'pid', 'cmdline']) 
                             if p.info['name'] and 'terminal64' in p.info['name'].lower()]
+            
             if mt5_processes:
-                self.logger.warning(f"既存のMT5プロセスが見つかりました: {len(mt5_processes)}個")
+                self.logger.info(f"既存のMT5プロセスを確認中: {len(mt5_processes)}個")
                 for proc in mt5_processes:
-                    self.logger.warning(f"PID: {proc.pid}, 名前: {proc.name()}")
+                    try:
+                        cmd_line = proc.info.get('cmdline', [])
+                        proc_path = cmd_line[0] if cmd_line else "不明"
+                        self.logger.info(f"既存のプロセス - PID: {proc.info['pid']}, パス: {proc_path}")
+                        
+                        # 同じパスのプロセスが存在する場合は終了を試みる
+                        if proc_path == self.mt5_path:
+                            self.logger.warning(f"同じパスのMT5プロセスを終了します: PID {proc.info['pid']}")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=10)  # 10秒待機
+                            except psutil.TimeoutExpired:
+                                self.logger.warning(f"プロセスの終了待機がタイムアウト: PID {proc.info['pid']}")
+                                proc.kill()  # 強制終了
+                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                        self.logger.warning(f"プロセス情報の取得に失敗: {e}")
+
+            # 少し待機してプロセスが完全に終了するのを待つ
+            time.sleep(2)
 
             # MT5の初期化を試行
+            self.logger.info("MT5の初期化を開始します...")
             if mt5.initialize(
                 path=self.mt5_path,
                 portable=True,
@@ -104,7 +124,7 @@ class MT5SessionProcess:
                 return False
 
         except Exception as e:
-            self.logger.error(f"MT5の初期化中に例外が発生: {str(e)}")
+            self.logger.error(f"MT5の初期化中に例外が発生: {str(e)}", exc_info=True)
             return False
 
     def handle_command(self, command: Dict[str, Any]) -> Dict[str, Any]:

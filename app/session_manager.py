@@ -439,6 +439,13 @@ class MT5Session:
             )
             self.process.start()
             
+            # プロセスの起動を確認
+            if not self.process.is_alive():
+                logger.error("MT5プロセスの起動に失敗しました")
+                return False
+                
+            logger.info(f"MT5プロセスを起動しました（PID: {self.process.pid}）")
+            
             # 初期化コマンドを送信
             init_command = {
                 "type": "initialize",
@@ -448,27 +455,49 @@ class MT5Session:
                     "server": self.server
                 }
             }
-            self.parent_conn.send(init_command)
             
-            # 結果を待機（タイムアウトを60秒に延長）
-            if self.parent_conn.poll(timeout=60):  # 60秒でタイムアウト
-                result = self.parent_conn.recv()
-                if result.get("success"):
-                    self.initialized = True
-                    logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
-                    return True
-                else:
-                    error_msg = result.get("error", "不明なエラー")
-                    logger.error(f"MT5初期化エラー: {error_msg}")
-                    self.cleanup()
-                    return False
-            else:
-                logger.error("MT5初期化がタイムアウトしました")
+            # コマンド送信前にパイプの状態を確認
+            if not self.parent_conn.writable:
+                logger.error("パイプが書き込み不可の状態です")
                 self.cleanup()
                 return False
                 
+            self.parent_conn.send(init_command)
+            logger.info("初期化コマンドを送信しました")
+            
+            # 結果を待機（タイムアウトを90秒に延長）
+            start_time = time.time()
+            timeout = 90  # 90秒のタイムアウト
+            
+            while time.time() - start_time < timeout:
+                if self.parent_conn.poll(1):  # 1秒ごとにチェック
+                    result = self.parent_conn.recv()
+                    if result.get("success"):
+                        self.initialized = True
+                        logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
+                        return True
+                    else:
+                        error_msg = result.get("error", "不明なエラー")
+                        logger.error(f"MT5初期化エラー: {error_msg}")
+                        self.cleanup()
+                        return False
+                
+                # プロセスの生存確認
+                if not self.process.is_alive():
+                    logger.error("MT5プロセスが予期せず終了しました")
+                    self.cleanup()
+                    return False
+                    
+                # 進捗ログ
+                if (time.time() - start_time) % 10 < 1:  # 10秒ごとに進捗を表示
+                    logger.info(f"MT5初期化待機中... 経過時間: {int(time.time() - start_time)}秒")
+            
+            logger.error("MT5初期化がタイムアウトしました")
+            self.cleanup()
+            return False
+                
         except Exception as e:
-            logger.error(f"MT5初期化中の例外: {e}")
+            logger.error(f"MT5初期化中の例外: {e}", exc_info=True)
             self.cleanup()
             return False
 
@@ -550,12 +579,19 @@ class SessionManager:
             session.cleanup()
             del self.sessions[session_id]
 
-    def cleanup_old_sessions(self) -> List[str]:
-        """古いセッションをクリーンアップする"""
+    def cleanup_old_sessions(self, max_age_seconds: int = 3600) -> List[str]:
+        """古いセッションをクリーンアップする
+        
+        Args:
+            max_age_seconds (int): セッションの最大有効期間（秒）。デフォルトは1時間（3600秒）
+            
+        Returns:
+            List[str]: クリーンアップされたセッションIDのリスト
+        """
         now = datetime.now()
         old_sessions = [
             session_id for session_id, session in self.sessions.items()
-            if (now - session.last_access).total_seconds() > 3600
+            if (now - session.last_access).total_seconds() > max_age_seconds
         ]
         for session_id in old_sessions:
             self.cleanup_session(session_id)
