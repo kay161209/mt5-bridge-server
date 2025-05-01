@@ -56,7 +56,7 @@ class MT5SessionProcess:
             print(f"ロガーの設定に失敗: {e}")
             raise
 
-    def initialize_mt5(self) -> bool:
+    def initialize_mt5(self, login: int, password: str, server: str) -> bool:
         """MT5を初期化する"""
         try:
             self.logger.info(f"MT5の初期化を開始 - セッションID: {self.session_id}")
@@ -119,10 +119,13 @@ class MT5SessionProcess:
                 for proc in remaining_processes:
                     self.logger.warning(f"残存プロセス - PID: {proc.pid}")
 
-            # MT5の初期化を試行
+            # MT5の初期化（ログイン情報を含む）を試行
             self.logger.info("MT5の初期化を開始します...")
             if mt5.initialize(
                 path=self.mt5_path,
+                login=login,
+                password=password,
+                server=server,
                 portable=True,
                 timeout=60000,
                 config_path=self.mt5_dir
@@ -156,20 +159,13 @@ class MT5SessionProcess:
         
         try:
             if cmd_type == 'initialize':
-                # まずMT5を初期化
-                if not self.initialize_mt5():
-                    return {'success': False, 'error': f"MT5の初期化に失敗: {mt5.last_error()}"}
-                
-                # 次にログイン
-                if not mt5.login(
-                    login=params.get('login'),
-                    password=params.get('password'),
-                    server=params.get('server')
-                ):
+                # MT5の初期化とログインを同時に実行
+                login_val = params.get('login')
+                password_val = params.get('password')
+                server_val = params.get('server')
+                if not self.initialize_mt5(login_val, password_val, server_val):
                     error = mt5.last_error()
-                    self.logger.error(f"MT5ログインエラー: {error}")
-                    return {'success': False, 'error': f"ログインに失敗: {error}"}
-                
+                    return {'success': False, 'error': f"MT5の初期化に失敗: {error}"}
                 self.initialized = True
                 return {'success': True, 'error': None}
             
@@ -198,18 +194,34 @@ class MT5SessionProcess:
                 mt5.shutdown()
                 self.initialized = False
                 self.logger.info(f"MT5シャットダウン完了 - セッション: {self.session_id}")
-                
-                # ログハンドラをクリーンアップ
-                for handler in self.logger.handlers[:]:
+                # ターミナルプロセスを強制終了してログファイルを解放
+                for proc in psutil.process_iter(['pid', 'exe']):
                     try:
-                        handler.close()
-                        self.logger.removeHandler(handler)
+                        exe = proc.info.get('exe')
+                        if exe and os.path.normcase(exe) == os.path.normcase(self.mt5_path):
+                            self.logger.info(f"ターミナルプロセスを終了します: PID {proc.pid}")
+                            proc.terminate()
+                            try:
+                                proc.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                self.logger.warning(f"ターミナルプロセス終了タイムアウト: PID {proc.pid}")
+                                proc.kill()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                        self.logger.warning(f"プロセス操作中にエラー: {e}")
                     except Exception as e:
-                        self.logger.error(f"ログハンドラのクリーンアップ中にエラー: {e}")
-                
-                # 少し待機してファイルハンドルが解放されるのを待つ
-                time.sleep(1)
-                
+                        self.logger.error(f"予期せぬエラー: {e}", exc_info=True)
+
+            # ログハンドラをクリーンアップ
+            for handler in self.logger.handlers[:]:
+                try:
+                    handler.close()
+                    self.logger.removeHandler(handler)
+                except Exception as e:
+                    self.logger.error(f"ログハンドラのクリーンアップ中にエラー: {e}")
+            
+            # 少し待機してファイルハンドルが解放されるのを待つ
+            time.sleep(1)
+            
         except Exception as e:
             self.logger.error(f"クリーンアップ中にエラー: {e}", exc_info=True)
 
