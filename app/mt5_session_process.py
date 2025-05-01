@@ -57,7 +57,7 @@ class MT5SessionProcess:
             raise
 
     def initialize_mt5(self, login: int, password: str, server: str) -> bool:
-        """MT5を初期化する"""
+        """MT5を初期化し、ログインする"""
         try:
             self.logger.info(f"MT5の初期化を開始 - セッションID: {self.session_id}")
             self.logger.info(f"MT5パス: {self.mt5_path}")
@@ -67,60 +67,12 @@ class MT5SessionProcess:
             if not os.path.exists(self.mt5_path):
                 raise FileNotFoundError(f"必須ファイルが見つかりません: {self.mt5_path}")
 
-            # プロセス情報とワーキングディレクトリの設定
-            self.logger.info(f"プロセスID: {os.getpid()}")
-            self.logger.info(f"実行パス: {os.getcwd()}")
-            self.logger.info(f"作業ディレクトリ: {self.mt5_dir}")
             # ワーキングディレクトリをMT5実行フォルダに変更
             os.chdir(self.mt5_dir)
+            self.logger.info(f"作業ディレクトリを変更: {os.getcwd()}")
 
-            # 既存のMT5プロセスをチェックして終了
-            mt5_processes = [p for p in psutil.process_iter(['name', 'pid', 'cmdline']) 
-                            if p.info['name'] and 'terminal64' in p.info['name'].lower()]
-            
-            if mt5_processes:
-                self.logger.info(f"既存のMT5プロセスを確認中: {len(mt5_processes)}個")
-                for proc in mt5_processes:
-                    try:
-                        # プロセスの詳細情報を取得
-                        proc_info = proc.as_dict(attrs=['pid', 'name', 'cmdline', 'create_time'])
-                        self.logger.info(f"既存のプロセス情報:")
-                        self.logger.info(f"  - PID: {proc_info['pid']}")
-                        self.logger.info(f"  - 名前: {proc_info['name']}")
-                        self.logger.info(f"  - コマンドライン: {proc_info.get('cmdline', ['不明'])}")
-                        
-                        # プロセスを終了
-                        self.logger.info(f"MT5プロセスを終了します: PID {proc_info['pid']}")
-                        proc.terminate()
-                        
-                        # 終了を待機（最大10秒）
-                        try:
-                            proc.wait(timeout=10)
-                            self.logger.info(f"プロセスが正常に終了しました: PID {proc_info['pid']}")
-                        except psutil.TimeoutExpired:
-                            self.logger.warning(f"プロセスの終了待機がタイムアウト。強制終了を試みます: PID {proc_info['pid']}")
-                            proc.kill()
-                            proc.wait(timeout=5)  # 強制終了の完了を待機
-                            
-                    except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-                        self.logger.warning(f"プロセス操作中にエラー: {e}")
-                    except Exception as e:
-                        self.logger.error(f"予期せぬエラー: {e}", exc_info=True)
-
-            # 少し待機してプロセスが完全に終了するのを待つ
-            self.logger.info("既存プロセスの終了を待機中...")
-            time.sleep(3)
-
-            # 再度プロセスをチェック
-            remaining_processes = [p for p in psutil.process_iter(['name']) 
-                                if p.info['name'] and 'terminal64' in p.info['name'].lower()]
-            if remaining_processes:
-                self.logger.warning(f"まだ {len(remaining_processes)} 個のMT5プロセスが実行中です")
-                for proc in remaining_processes:
-                    self.logger.warning(f"残存プロセス - PID: {proc.pid}")
-
-            # MT5の初期化（ログイン情報を含む）を試行
-            self.logger.info("MT5の初期化を開始します...")
+            # MT5の初期化およびログインを一括実行
+            self.logger.info("MT5.initialize() を login, password, server を指定して呼び出します")
             if mt5.initialize(
                 path=self.mt5_path,
                 login=login,
@@ -130,18 +82,15 @@ class MT5SessionProcess:
                 timeout=60000,
                 config_path=self.mt5_dir
             ):
-                self.logger.info("MT5の初期化に成功しました")
-                terminal_info = mt5.terminal_info()
-                self.logger.info(f"ターミナル情報: {terminal_info}")
+                self.logger.info("MT5.initialize() に成功しました (ログイン完了)")
+                self.initialized = True
                 return True
             else:
-                error = mt5.last_error()
-                code, msg = error
-                self.logger.error(f"MT5の初期化に失敗: エラーコード {code}, メッセージ: {msg}")
+                code, msg = mt5.last_error()
+                self.logger.error(f"MT5.initialize() に失敗: エラーコード {code}, メッセージ: {msg}")
                 return False
-
         except Exception as e:
-            self.logger.error(f"MT5の初期化中に例外が発生: {str(e)}", exc_info=True)
+            self.logger.error(f"MT5の初期化中に例外が発生: {e}", exc_info=True)
             return False
 
     def handle_command(self, command: Dict[str, Any]) -> Dict[str, Any]:

@@ -22,6 +22,7 @@ from multiprocessing import Process, Pipe
 import signal
 from app.config import settings
 from app.mt5_session_process import start_session_process
+import hashlib
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
@@ -374,7 +375,9 @@ def create_session_directory(session_id: str) -> str:
     try:
         # セッションディレクトリのパスを生成
         session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-        mt5_dir = os.path.join(session_dir, "mt5")
+        # mt5ディレクトリをsession_idのハッシュ値名にする
+        hashed_name = hashlib.sha256(session_id.encode('utf-8')).hexdigest()
+        mt5_dir = os.path.join(session_dir, hashed_name)
         
         # ディレクトリが存在する場合は削除して再作成（PermissionError時は再試行）
         if os.path.exists(session_dir):
