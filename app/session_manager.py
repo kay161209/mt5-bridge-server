@@ -478,20 +478,29 @@ class SessionManager:
         """新しいセッションを作成する"""
         # セッションIDをSHA256ハッシュで生成
         session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-        # MT5実行ファイルのパス取得とデータフォルダ設定
+        # MT5ポータブルの配置先ディレクトリを作成し、データフォルダを取得
         exe_path = create_session_directory(session_id)
         data_dir = os.path.dirname(exe_path)
-        # worker.py スクリプトをサブプロセスとして起動
+        # data_dir の存在をチェック
+        if not os.path.isdir(data_dir):
+            raise Exception(f"セッション用ディレクトリが存在しません: {data_dir}")
+
+        # worker.py の絶対パスを取得
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        worker_path = os.path.join(root_dir, "worker.py")
+        if not os.path.isfile(worker_path):
+            raise Exception(f"worker.py が見つかりません: {worker_path}")
+        # サブプロセス起動コマンドを構築
         cmd = [
             sys.executable,
-            os.path.join(os.getcwd(), "worker.py"),
+            worker_path,
             "--id", session_id,
             "--login", str(login),
             "--password", password,
             "--server", server,
             "--data-dir", data_dir
         ]
-        # worker.py をデフォルトのカレントディレクトリで起動
+        # data_dir をカレントディレクトリにして worker.py を起動
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
