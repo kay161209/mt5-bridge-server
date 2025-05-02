@@ -504,24 +504,26 @@ class SessionManager:
             server_sock.bind(('127.0.0.1', 0))
             server_sock.listen(1)
             host, port = server_sock.getsockname()
-            # Task Scheduler 用コマンドを構築
+            # Task Scheduler 用バッチファイルを作成（/TR の長さ制限回避）
             task_name = f"MT5Worker_{session_id}"
-            cmd_args = [
-                sys.executable, worker_path,
+            bat_path = os.path.join(data_dir, f"run_{session_id}.bat")
+            bat_content = ' '.join([
+                f'"{sys.executable}"', f'"{worker_path}"',
                 "--id", session_id,
                 "--login", str(login),
                 "--password", password,
                 "--server", server,
-                "--exe-path", exe_path,
-                "--data-dir", data_dir,
+                "--exe-path", f'"{exe_path}"',
+                "--data-dir", f'"{data_dir}"',
                 "--ipc-port", str(port)
-            ]
-            cmd_line = '"' + '" "'.join(cmd_args) + '"'
+            ])
+            with open(bat_path, 'w', encoding='utf-8') as bat_file:
+                bat_file.write(bat_content)
             # タスク登録（ONCE, 強制上書き）※実行ユーザーを明示
             run_user = os.getenv('MT5_TASK_RUN_USER', getpass.getuser())
             subprocess.run([
                 "schtasks", "/Create", "/TN", task_name,
-                "/TR", cmd_line,
+                "/TR", f'"{bat_path}"',
                 "/SC", "ONCE", "/ST", "00:00", "/RL", "HIGHEST",
                 "/RU", run_user,
                 "/F"
