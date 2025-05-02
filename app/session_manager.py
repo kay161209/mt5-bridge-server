@@ -489,12 +489,21 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.cleanup()
-            # MT5 ターミナルプロセスを強制終了
+            # MT5ターミナルプロセスを探して強制終了
             session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
             exe_path = os.path.join(session_dir, 'terminal64.exe')
-            for proc in psutil.process_iter(['exe']):
+            for proc in psutil.process_iter(['name', 'exe']):
                 try:
-                    if proc.info['exe'] and os.path.normcase(proc.info['exe']) == os.path.normcase(exe_path):
+                    name = proc.info.get('name', '').lower() if proc.info.get('name') else ''
+                    exe = proc.info.get('exe')
+                    match = False
+                    # プロセス名が terminal64.exe かつ、exeパスがセッションディレクトリ内
+                    if name == 'terminal64.exe' and exe and os.path.normcase(session_dir) in os.path.normcase(exe):
+                        match = True
+                    # exeパスがピンポイントで一致する場合
+                    elif exe and os.path.normcase(exe) == os.path.normcase(exe_path):
+                        match = True
+                    if match:
                         proc.kill()
                         proc.wait(timeout=5)
                 except Exception:
