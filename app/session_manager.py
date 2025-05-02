@@ -367,65 +367,24 @@ def check_gui_status(pid: int) -> Dict[str, Any]:
     
     return result
 
-def create_session_directory(session_id: str) -> str:
-    """セッション用のMT5ディレクトリを作成し、必要なファイルをコピーする"""
-    try:
-        # セッションディレクトリのパスを生成
-        session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-        # mt5ディレクトリをsession_idのハッシュ値名にする
-        hashed_name = hashlib.sha256(session_id.encode('utf-8')).hexdigest()
-        mt5_dir = os.path.join(session_dir, hashed_name)
-        
-        # ディレクトリが存在する場合は削除して再作成（PermissionError時は再試行）
-        if os.path.exists(session_dir):
-            try:
-                shutil.rmtree(session_dir)
-            except Exception as e:
-                # Windowsのファイルロック時は待機して再試行
-                if hasattr(e, 'winerror') and e.winerror == 32:
-                    logger.warning(f"セッションディレクトリが使用中のため削除を待機します: {session_dir}, {e}")
-                    time.sleep(2)
-                    try:
-                        shutil.rmtree(session_dir)
-                    except Exception as e2:
-                        logger.error(f"セッションディレクトリの再削除に失敗: {e2}")
-                        raise
-                else:
-                    raise
-        os.makedirs(mt5_dir)
-        
-        # MT5ポータブルインストールをコピー
-        logger.info(f"MT5ポータブルインストールを {settings.mt5_portable_path} から {mt5_dir} にコピーします")
-        shutil.copytree(settings.mt5_portable_path, mt5_dir, dirs_exist_ok=True)
-        # アカウント情報のチェック
-        accounts_src = os.path.join(settings.mt5_portable_path, 'accounts.dat')
-        if os.path.exists(accounts_src):
-            shutil.copy2(accounts_src, os.path.join(mt5_dir, 'accounts.dat'))
-        else:
-            logger.warning(f"アカウント情報 (accounts.dat) が見つかりません: {accounts_src}。自動ログインはできません。")
-        
-        # 必須ファイルの存在確認
-        required_files = [
-            "terminal64.exe",
-            os.path.join("Config", "terminal.ini")
-        ]
-        
-        for file in required_files:
-            file_path = os.path.join(mt5_dir, file)
-            if not os.path.exists(file_path):
-                raise FileNotFoundError(f"必須ファイルが見つかりません: {file_path}")
-        
-        # terminal64.exeのパスを返す
-        return os.path.join(mt5_dir, "terminal64.exe")
-        
-    except Exception as e:
-        logger.error(f"セッションディレクトリの作成中にエラーが発生: {str(e)}")
-        if os.path.exists(session_dir):
-            try:
-                shutil.rmtree(session_dir)
-            except Exception as cleanup_error:
-                logger.error(f"セッションディレクトリのクリーンアップ中にエラーが発生: {str(cleanup_error)}")
-        raise
+def create_session_directory(session_id: str) -> tuple[str, str]:
+    """セッション用データディレクトリを作成し、アカウント情報をコピー、MT5実行パスとデータディレクトリを返す"""
+    session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
+    # 既存ディレクトリを削除して再作成
+    if os.path.exists(session_dir):
+        shutil.rmtree(session_dir)
+    os.makedirs(session_dir, exist_ok=True)
+    # アカウント情報をコピー
+    accounts_src = os.path.join(settings.mt5_portable_path, 'accounts.dat')
+    if os.path.exists(accounts_src):
+        shutil.copy2(accounts_src, os.path.join(session_dir, 'accounts.dat'))
+    else:
+        logger.warning(f"アカウント情報(accounts.dat)が見つかりません: {accounts_src}")
+    # MT5 実行ファイルは共有インストールを使用
+    exe_path = os.path.join(settings.mt5_portable_path, 'terminal64.exe')
+    if not os.path.exists(exe_path):
+        raise FileNotFoundError(f"terminal64.exe が見つかりません: {exe_path}")
+    return exe_path, session_dir
 
 # WorkerSession: 完全独立プロセスで動作する MT5 セッションラッパー
 class WorkerSession:
@@ -478,13 +437,9 @@ class SessionManager:
         """新しいセッションを作成する"""
         # セッションIDをSHA256ハッシュで生成
         session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-        # MT5ポータブルの配置先ディレクトリを作成し、データフォルダを取得
-        exe_path = create_session_directory(session_id)
-        data_dir = os.path.dirname(exe_path)
-        # data_dir の存在をチェック
-        if not os.path.isdir(data_dir):
-            raise Exception(f"セッション用ディレクトリが存在しません: {data_dir}")
-
+        # MT5実行ファイルのパスとセッションディレクトリを取得
+        exe_path, data_dir = create_session_directory(session_id)
+        # data_dir は既に作成済み
         # worker.py の絶対パスを取得
         root_dir = os.path.dirname(os.path.dirname(__file__))
         worker_path = os.path.join(root_dir, "worker.py")
@@ -498,21 +453,15 @@ class SessionManager:
             "--login", str(login),
             "--password", password,
             "--server", server,
+            "--exe-path", exe_path,
             "--data-dir", data_dir
         ]
-        # data_dir をカレントディレクトリにして worker.py を起動
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True
         )
-        # 初期化結果を待機
-        init_line = proc.stdout.readline()
-        init_res = json.loads(init_line)
-        if not init_res.get("success"):
-            proc.terminate()
-            raise Exception(f"MT5初期化失敗: {init_res.get('error')}")
         # WorkerSession を生成・登録
         session = WorkerSession(session_id, login, server, proc)
         self.sessions[session_id] = session

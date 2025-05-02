@@ -12,9 +12,10 @@ def main():
     parser.add_argument("--password", required=True)
     parser.add_argument("--server", required=True)
     parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--exe-path", required=True)
     args = parser.parse_args()
 
-    terminal_exe = os.path.join(args.data_dir, "terminal64.exe")
+    terminal_exe = args.exe_path
     ok = mt5.initialize(
         path=terminal_exe,
         login=args.login, password=args.password, server=args.server,
@@ -22,9 +23,9 @@ def main():
     )
     if not ok:
         err = mt5.last_error()
-        print(json.dumps({"type":"init","success":False,"error":err}))
+        print(json.dumps({"type":"init","success":False,"error":err}), flush=True)
         sys.exit(1)
-    print(json.dumps({"type":"init","success":True,"error":None}))
+    print(json.dumps({"type":"init","success":True,"error":None}), flush=True)
 
     for line in sys.stdin:
         try:
