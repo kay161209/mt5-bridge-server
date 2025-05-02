@@ -371,28 +371,13 @@ def create_session_directory(session_id: str) -> Tuple[str, str]:
     """セッション用データディレクトリを作成し、Config と accounts.dat のみコピーし、
     MetaTrader5 実行ファイルのパスとセッションディレクトリを返す"""
     session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-    # 既存セッションディレクトリをクリア
+    # 既存セッションディレクトリをクリアし、ポータブルインストール全体を複製
     if os.path.exists(session_dir):
         shutil.rmtree(session_dir)
-    # セッションディレクトリ作成
-    os.makedirs(session_dir, exist_ok=True)
-    # Config ディレクトリのみコピー（小容量）
-    config_src = os.path.join(settings.mt5_portable_path, 'Config')
-    config_dst = os.path.join(session_dir, 'Config')
-    if os.path.exists(config_src):
-        shutil.copytree(config_src, config_dst, dirs_exist_ok=True)
-    else:
-        logger.warning(f"Config ディレクトリが見つかりません: {config_src}")
-    # accounts.dat をコピー
-    accounts_src = os.path.join(settings.mt5_portable_path, 'accounts.dat')
-    if os.path.exists(accounts_src):
-        shutil.copy2(accounts_src, os.path.join(session_dir, 'accounts.dat'))
-    else:
-        logger.warning(f"accounts.dat が見つかりません: {accounts_src}")
-    # 実行ファイルパスは共有ポータブルを参照
-    exe_path = os.path.join(settings.mt5_portable_path, 'terminal64.exe')
-    if not os.path.exists(exe_path):
-        raise FileNotFoundError(f"terminal64.exe が見つかりません: {exe_path}")
+    # ポータブルインストールをセッションディレクトリへコピー（複数インスタンス起動用）
+    shutil.copytree(settings.mt5_portable_path, session_dir)
+    # セッションディレクトリ内の terminal64.exe を実行
+    exe_path = os.path.join(session_dir, 'terminal64.exe')
     return exe_path, session_dir
 
 # WorkerSession: 完全独立プロセスで動作する MT5 セッションラッパー
