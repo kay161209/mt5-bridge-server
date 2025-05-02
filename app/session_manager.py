@@ -21,6 +21,7 @@ import signal
 from app.config import settings
 import hashlib
 import socket
+import getpass
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
@@ -516,11 +517,14 @@ class SessionManager:
                 "--ipc-port", str(port)
             ]
             cmd_line = '"' + '" "'.join(cmd_args) + '"'
-            # タスク登録（ONCE, 強制上書き）
+            # タスク登録（ONCE, 強制上書き）※実行ユーザーを明示
+            run_user = os.getenv('MT5_TASK_RUN_USER', getpass.getuser())
             subprocess.run([
                 "schtasks", "/Create", "/TN", task_name,
                 "/TR", cmd_line,
-                "/SC", "ONCE", "/ST", "00:00", "/RL", "HIGHEST", "/F"
+                "/SC", "ONCE", "/ST", "00:00", "/RL", "HIGHEST",
+                "/RU", run_user,
+                "/F"
             ], check=True)
             # タスクを即時実行
             subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True)
