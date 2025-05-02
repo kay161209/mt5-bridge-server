@@ -478,8 +478,9 @@ class SessionManager:
         """新しいセッションを作成する"""
         # セッションIDをSHA256ハッシュで生成
         session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-        # セッション用ディレクトリの作成
-        session_dir = create_session_directory(session_id)
+        # MT5実行ファイルのパス取得とデータフォルダ設定
+        exe_path = create_session_directory(session_id)
+        data_dir = os.path.dirname(exe_path)
         # worker.py スクリプトをサブプロセスとして起動
         cmd = [
             sys.executable,
@@ -488,11 +489,11 @@ class SessionManager:
             "--login", str(login),
             "--password", password,
             "--server", server,
-            "--data-dir", session_dir
+            "--data-dir", data_dir
         ]
         proc = subprocess.Popen(
             cmd,
-            cwd=session_dir,
+            cwd=data_dir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True
