@@ -519,15 +519,32 @@ class SessionManager:
             ])
             with open(bat_path, 'w', encoding='utf-8') as bat_file:
                 bat_file.write(bat_content)
-            # タスク登録（ONCE, 強制上書き）※実行ユーザーを明示
-            run_user = os.getenv('MT5_TASK_RUN_USER', getpass.getuser())
-            subprocess.run([
+            # タスク登録（ONCE, 強制上書き）※実行ユーザーと開始時間を動的に設定
+            # 実行ユーザーを環境変数で指定、なければドメイン\ユーザー形式を自動構築
+            env_user = os.getenv('MT5_TASK_RUN_USER')
+            if env_user:
+                run_user = env_user
+            else:
+                domain = os.getenv('USERDOMAIN') or os.getenv('COMPUTERNAME')
+                user = getpass.getuser()
+                run_user = f"{domain}\\{user}"
+            run_password = os.getenv('MT5_TASK_RUN_PASSWORD')
+            # 開始時刻を現在時刻＋1分に設定（HH:mm）
+            start_time = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
+            # schtasks コマンド組み立て
+            schtasks_cmd = [
                 "schtasks", "/Create", "/TN", task_name,
                 "/TR", f'"{bat_path}"',
-                "/SC", "ONCE", "/ST", "00:00", "/RL", "HIGHEST",
-                "/RU", run_user,
-                "/F"
-            ], check=True)
+                "/SC", "ONCE", "/ST", start_time,
+                "/RL", "HIGHEST",
+                "/RU", run_user
+            ]
+            # パスワードが指定されていれば /RP も追加
+            if run_password is not None:
+                schtasks_cmd.extend(["/RP", run_password])
+            # 強制上書き
+            schtasks_cmd.append("/F")
+            subprocess.run(schtasks_cmd, check=True)
             # タスクを即時実行
             subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True)
             # 子プロセスからの接続を待機
