@@ -45,6 +45,29 @@ def main():
         sys.exit(1)
     # 初期化成功を親プロセスへ通知
     init_msg = {"type":"init","success":True,"error":None}
+    # Windows環境でMetaTraderのウィンドウを非表示化
+    if platform.system() == "Windows":
+        try:
+            # 初期化済みのターミナルプロセスIDを取得
+            term_info = mt5.terminal_info()
+            pid = term_info.pid
+            import ctypes
+            # 定数・API定義
+            SW_HIDE = 0
+            EnumWindows = ctypes.windll.user32.EnumWindows
+            EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_int, ctypes.c_int)
+            GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
+            ShowWindow = ctypes.windll.user32.ShowWindow
+            # コールバックでウィンドウハンドルを隠す
+            def _hide(hwnd, lParam):
+                pid_buf = ctypes.c_ulong()
+                GetWindowThreadProcessId(hwnd, ctypes.byref(pid_buf))
+                if pid_buf.value == pid:
+                    ShowWindow(hwnd, SW_HIDE)
+                return True
+            EnumWindows(EnumWindowsProc(_hide), 0)
+        except Exception:
+            pass
     if args.ipc_port:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(("127.0.0.1", args.ipc_port))
