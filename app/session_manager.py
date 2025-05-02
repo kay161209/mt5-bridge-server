@@ -491,9 +491,9 @@ class SessionManager:
             "--server", server,
             "--data-dir", data_dir
         ]
+        # worker.py をデフォルトのカレントディレクトリで起動
         proc = subprocess.Popen(
             cmd,
-            cwd=data_dir,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True
