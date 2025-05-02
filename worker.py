@@ -147,6 +147,18 @@ def main():
         out_stream.flush()
 
     mt5.shutdown()
+    # Windows環境: MetaTrader ターミナルプロセスを終了
+    if platform.system() == "Windows":
+        try:
+            # プロセスIDを取得・kill
+            term_info = mt5.terminal_info()
+            pid = term_info.pid
+            import psutil
+            proc = psutil.Process(pid)
+            proc.terminate()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     try:

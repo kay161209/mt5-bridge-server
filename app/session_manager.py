@@ -439,14 +439,21 @@ class WorkerSession:
     def cleanup(self):
         """子プロセスの終了処理"""
         try:
-            # 終了コマンド送信
+            # 終了コマンドを送信し、Python worker の mt5.shutdown を実行させる
             self.proc.stdin.write(json.dumps({"type":"terminate"}) + "\n")
             self.proc.stdin.flush()
         except Exception:
             pass
         try:
-            self.proc.terminate()
-            self.proc.wait(timeout=5)
+            # Python worker がグレースフルに終了するのを待機
+            self.proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            try:
+                # タイムアウト後は強制終了
+                self.proc.terminate()
+                self.proc.wait(timeout=5)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -489,23 +496,21 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.cleanup()
-            # MT5ターミナルプロセスを探して強制終了
+            # MT5ターミナル含む、セッションディレクトリ内のプロセスを強制終了
             session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-            exe_path = os.path.join(session_dir, 'terminal64.exe')
-            for proc in psutil.process_iter(['name', 'exe']):
+            for proc in psutil.process_iter(['exe']):
                 try:
-                    name = proc.info.get('name', '').lower() if proc.info.get('name') else ''
                     exe = proc.info.get('exe')
-                    match = False
-                    # プロセス名が terminal64.exe かつ、exeパスがセッションディレクトリ内
-                    if name == 'terminal64.exe' and exe and os.path.normcase(session_dir) in os.path.normcase(exe):
-                        match = True
-                    # exeパスがピンポイントで一致する場合
-                    elif exe and os.path.normcase(exe) == os.path.normcase(exe_path):
-                        match = True
-                    if match:
+                    # 実行ファイルパスがセッション用ディレクトリ内にある場合にkill
+                    if exe and os.path.normcase(session_dir) in os.path.normcase(exe):
                         proc.kill()
                         proc.wait(timeout=5)
+                except Exception:
+                    pass
+            # フォールバック: Windows環境で terminal64.exe を強制終了
+            if platform.system() == 'Windows':
+                try:
+                    subprocess.run(['taskkill', '/F', '/IM', 'terminal64.exe'], check=False)
                 except Exception:
                     pass
             # セッションディレクトリを削除
