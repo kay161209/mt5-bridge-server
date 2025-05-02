@@ -1,6 +1,7 @@
 # MT5 Bridge API
 
 MetaTrader 5 を FastAPI / WebSocket で操作するシンプルなブリッジ。
+すべての MT5 取引機能（ローソク足データの取得、注文の発注・キャンセル、ポジション管理など）をREST APIとして提供します。
 
 **注意**: このシステムは MetaTrader 5 を使用するため、Windows OS 環境が必要です。
 

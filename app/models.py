@@ -379,4 +379,28 @@ class SessionResponse(BaseModel):
     age_seconds: float
 
 class SessionsListResponse(BaseModel):
-    sessions: Dict[str, SessionResponse] 
+
+class PositionCloseRequest(BaseModel):
+    symbol: str
+    ticket: Optional[int] = None
+
+class PositionClosePartialRequest(BaseModel):
+    ticket: int
+    volume: float = Field(gt=0)
+
+class PositionModifyRequest(BaseModel):
+    ticket: int
+    sl: float = 0.0
+    tp: float = 0.0
+
+
+class OrderCancelRequest(BaseModel):
+    ticket: int
+
+class OrderModifyRequest(BaseModel):
+    ticket: int
+    price: float = 0.0
+    sl: float = 0.0
+    tp: float = 0.0
+    expiration: int = 0
+

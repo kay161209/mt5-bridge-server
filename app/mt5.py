@@ -576,4 +576,279 @@ def get_history_deals(date_from: Optional[datetime] = None, date_to: Optional[da
                 deal_dict[prop] = getattr(deal, prop)
         result.append(deal_dict)
     
-    return result      
+    return result       
+
+def position_close(symbol: str, ticket: Optional[int] = None) -> dict:
+    """
+    ポジションをクローズする
+    
+    Args:
+        symbol: 通貨ペア
+        ticket: ポジションチケット番号 (Noneの場合は指定シンボルの全ポジション)
+        
+    Returns:
+        クローズ結果
+    """
+    if ticket is not None:
+        position = mt5.positions_get(ticket=ticket)
+        if position is None or len(position) == 0:
+            return {"retcode": -1, "comment": f"ポジションが見つかりません: {ticket}"}
+        
+        position = position[0]
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": position.symbol,
+            "volume": position.volume,
+            "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+            "position": position.ticket,
+            "price": mt5.symbol_info_tick(position.symbol).bid if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(position.symbol).ask,
+            "deviation": 20,
+            "magic": position.magic,
+            "comment": f"Close position #{position.ticket}",
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        
+        result = mt5.order_send(request)
+        if result is None:
+            error = mt5.last_error()
+            return {"retcode": error[0], "comment": error[1]}
+        
+        result_dict = {}
+        for prop in dir(result):
+            if not prop.startswith('_'):
+                if prop == 'request':
+                    request_dict = {}
+                    for req_prop in dir(result.request):
+                        if not req_prop.startswith('_'):
+                            request_dict[req_prop] = getattr(result.request, req_prop)
+                    result_dict[prop] = request_dict
+                else:
+                    result_dict[prop] = getattr(result, prop)
+        
+        return result_dict
+    else:
+        positions = mt5.positions_get(symbol=symbol)
+        if positions is None or len(positions) == 0:
+            return {"retcode": -1, "comment": f"ポジションが見つかりません: {symbol}"}
+        
+        results = []
+        for position in positions:
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": position.symbol,
+                "volume": position.volume,
+                "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+                "position": position.ticket,
+                "price": mt5.symbol_info_tick(position.symbol).bid if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(position.symbol).ask,
+                "deviation": 20,
+                "magic": position.magic,
+                "comment": f"Close position #{position.ticket}",
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            
+            result = mt5.order_send(request)
+            if result is None:
+                error = mt5.last_error()
+                results.append({"retcode": error[0], "comment": error[1], "ticket": position.ticket})
+            else:
+                result_dict = {}
+                for prop in dir(result):
+                    if not prop.startswith('_'):
+                        if prop == 'request':
+                            request_dict = {}
+                            for req_prop in dir(result.request):
+                                if not req_prop.startswith('_'):
+                                    request_dict[req_prop] = getattr(result.request, req_prop)
+                            result_dict[prop] = request_dict
+                        else:
+                            result_dict[prop] = getattr(result, prop)
+                results.append(result_dict)
+        
+        return {"results": results}
+
+def position_close_partial(ticket: int, volume: float) -> dict:
+    """
+    ポジションを部分的にクローズする
+    
+    Args:
+        ticket: ポジションチケット番号
+        volume: クローズする量
+        
+    Returns:
+        クローズ結果
+    """
+    position = mt5.positions_get(ticket=ticket)
+    if position is None or len(position) == 0:
+        return {"retcode": -1, "comment": f"ポジションが見つかりません: {ticket}"}
+    
+    position = position[0]
+    
+    if volume >= position.volume:
+        return {"retcode": -1, "comment": f"クローズ量がポジション量以上です: {volume} >= {position.volume}"}
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": position.symbol,
+        "volume": volume,
+        "type": mt5.ORDER_TYPE_SELL if position.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY,
+        "position": position.ticket,
+        "price": mt5.symbol_info_tick(position.symbol).bid if position.type == mt5.ORDER_TYPE_BUY else mt5.symbol_info_tick(position.symbol).ask,
+        "deviation": 20,
+        "magic": position.magic,
+        "comment": f"Partial close position #{position.ticket}",
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    
+    result = mt5.order_send(request)
+    if result is None:
+        error = mt5.last_error()
+        return {"retcode": error[0], "comment": error[1]}
+    
+    result_dict = {}
+    for prop in dir(result):
+        if not prop.startswith('_'):
+            if prop == 'request':
+                request_dict = {}
+                for req_prop in dir(result.request):
+                    if not req_prop.startswith('_'):
+                        request_dict[req_prop] = getattr(result.request, req_prop)
+                result_dict[prop] = request_dict
+            else:
+                result_dict[prop] = getattr(result, prop)
+    
+    return result_dict
+
+def position_modify(ticket: int, sl: float = 0.0, tp: float = 0.0) -> dict:
+    """
+    ポジションのSL/TPを変更する
+    
+    Args:
+        ticket: ポジションチケット番号
+        sl: 新しいストップロス価格 (0.0で変更なし)
+        tp: 新しい利益確定価格 (0.0で変更なし)
+        
+    Returns:
+        変更結果
+    """
+    position = mt5.positions_get(ticket=ticket)
+    if position is None or len(position) == 0:
+        return {"retcode": -1, "comment": f"ポジションが見つかりません: {ticket}"}
+    
+    position = position[0]
+    
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "symbol": position.symbol,
+        "position": position.ticket,
+        "sl": sl,
+        "tp": tp,
+    }
+    
+    result = mt5.order_send(request)
+    if result is None:
+        error = mt5.last_error()
+        return {"retcode": error[0], "comment": error[1]}
+    
+    result_dict = {}
+    for prop in dir(result):
+        if not prop.startswith('_'):
+            if prop == 'request':
+                request_dict = {}
+                for req_prop in dir(result.request):
+                    if not req_prop.startswith('_'):
+                        request_dict[req_prop] = getattr(result.request, req_prop)
+                result_dict[prop] = request_dict
+            else:
+                result_dict[prop] = getattr(result, prop)
+    
+    return result_dict
+
+def order_cancel(ticket: int) -> dict:
+    """
+    注文をキャンセルする
+    
+    Args:
+        ticket: 注文チケット番号
+        
+    Returns:
+        キャンセル結果
+    """
+    order = mt5.orders_get(ticket=ticket)
+    if order is None or len(order) == 0:
+        return {"retcode": -1, "comment": f"注文が見つかりません: {ticket}"}
+    
+    request = {
+        "action": mt5.TRADE_ACTION_REMOVE,
+        "order": ticket,
+    }
+    
+    result = mt5.order_send(request)
+    if result is None:
+        error = mt5.last_error()
+        return {"retcode": error[0], "comment": error[1]}
+    
+    result_dict = {}
+    for prop in dir(result):
+        if not prop.startswith('_'):
+            if prop == 'request':
+                request_dict = {}
+                for req_prop in dir(result.request):
+                    if not req_prop.startswith('_'):
+                        request_dict[req_prop] = getattr(result.request, req_prop)
+                result_dict[prop] = request_dict
+            else:
+                result_dict[prop] = getattr(result, prop)
+    
+    return result_dict
+
+def order_modify(ticket: int, price: float = 0.0, sl: float = 0.0, tp: float = 0.0, expiration: int = 0) -> dict:
+    """
+    注文を変更する
+    
+    Args:
+        ticket: 注文チケット番号
+        price: 新しい価格 (0.0で変更なし)
+        sl: 新しいストップロス価格 (0.0で変更なし)
+        tp: 新しい利益確定価格 (0.0で変更なし)
+        expiration: 新しい有効期限 (0で変更なし)
+        
+    Returns:
+        変更結果
+    """
+    order = mt5.orders_get(ticket=ticket)
+    if order is None or len(order) == 0:
+        return {"retcode": -1, "comment": f"注文が見つかりません: {ticket}"}
+    
+    order = order[0]
+    
+    request = {
+        "action": mt5.TRADE_ACTION_MODIFY,
+        "order": ticket,
+        "symbol": order.symbol,
+        "price": price if price > 0.0 else order.price_open,
+        "sl": sl,
+        "tp": tp,
+    }
+    
+    if expiration > 0:
+        request["expiration"] = expiration
+    
+    result = mt5.order_send(request)
+    if result is None:
+        error = mt5.last_error()
+        return {"retcode": error[0], "comment": error[1]}
+    
+    result_dict = {}
+    for prop in dir(result):
+        if not prop.startswith('_'):
+            if prop == 'request':
+                request_dict = {}
+                for req_prop in dir(result.request):
+                    if not req_prop.startswith('_'):
+                        request_dict[req_prop] = getattr(result.request, req_prop)
+                result_dict[prop] = request_dict
+            else:
+                result_dict[prop] = getattr(result, prop)
+    
+    return result_dict  
