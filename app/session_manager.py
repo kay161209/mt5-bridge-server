@@ -489,6 +489,19 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.cleanup()
+            # MT5 ターミナルプロセスを強制終了
+            session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
+            exe_path = os.path.join(session_dir, 'terminal64.exe')
+            for proc in psutil.process_iter(['exe']):
+                try:
+                    if proc.info['exe'] and os.path.normcase(proc.info['exe']) == os.path.normcase(exe_path):
+                        proc.kill()
+                        proc.wait(timeout=5)
+                except Exception:
+                    pass
+            # セッションディレクトリを削除
+            if os.path.isdir(session_dir):
+                shutil.rmtree(session_dir, ignore_errors=True)
 
     def cleanup_old_sessions(self, max_age_seconds: int = 3600) -> List[str]:
         """古いセッションをクリーンアップする
