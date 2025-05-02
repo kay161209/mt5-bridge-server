@@ -4,6 +4,8 @@ import os
 import json
 import argparse
 import platform
+import socket
+import io
 # MT5 モジュールのインポートを安全に行う
 try:
     import MetaTrader5 as mt5
@@ -20,6 +22,7 @@ def main():
     parser.add_argument("--server", required=True)
     parser.add_argument("--data-dir", required=True)
     parser.add_argument("--exe-path", required=True)
+    parser.add_argument("--ipc-port", type=int, required=False)
     args = parser.parse_args()
 
     # macOS/Linux では WINEPREFIX をセッション固有ディレクトリに設定
@@ -40,10 +43,24 @@ def main():
         # 初期化失敗を親プロセスへ通知（フラッシュ付き）
         print(json.dumps({"type":"init","success":False,"error":err}), flush=True)
         sys.exit(1)
-    # 初期化成功を親プロセスへ通知（フラッシュ付き）
-    print(json.dumps({"type":"init","success":True,"error":None}), flush=True)
+    # 初期化成功を親プロセスへ通知
+    init_msg = {"type":"init","success":True,"error":None}
+    if args.ipc_port:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(("127.0.0.1", args.ipc_port))
+        in_stream = sock.makefile('r', encoding='utf-8')
+        out_stream = sock.makefile('w', encoding='utf-8')
+        out_stream.write(json.dumps(init_msg) + "\n")
+        out_stream.flush()
+    else:
+        sys.stdout.write(json.dumps(init_msg) + "\n")
+        sys.stdout.flush()
+    # 入出力ストリームの選択
+    if not args.ipc_port:
+        in_stream = sys.stdin
+        out_stream = sys.stdout
 
-    for line in sys.stdin:
+    for line in in_stream:
         try:
             req = json.loads(line)
         except json.JSONDecodeError:
@@ -77,7 +94,8 @@ def main():
                 res.update({"success": False, "error": f"不明なコマンド: {cmd_type}"})
         except Exception as e:
             res.update({"success": False, "error": str(e)})
-        print(json.dumps(res), flush=True)
+        out_stream.write(json.dumps(res) + "\n")
+        out_stream.flush()
 
     mt5.shutdown()
 
@@ -86,5 +104,11 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # 予期せぬ例外を親プロセスへ通知
-        print(json.dumps({"type":"init","success":False,"error":str(e)}), flush=True)
+        err_msg = {"type":"init","success":False,"error":str(e)}
+        try:
+            out_stream.write(json.dumps(err_msg) + "\n")
+            out_stream.flush()
+        except:
+            sys.stdout.write(json.dumps(err_msg) + "\n")
+            sys.stdout.flush()
         sys.exit(1) 

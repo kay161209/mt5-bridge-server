@@ -20,6 +20,7 @@ import select
 import signal
 from app.config import settings
 import hashlib
+import socket
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
@@ -446,6 +447,36 @@ class WorkerSession:
         except Exception:
             pass
 
+class WorkerSessionSocket(WorkerSession):
+    """TCP ソケット経由で JSON コマンドを送受信するセッション"""
+    def __init__(self, session_id: str, login: int, server: str, conn_file):
+        super().__init__(session_id, login, server, proc=None)
+        self.conn_file = conn_file
+
+    def send_command(self, command: dict) -> Any:
+        self.last_access = datetime.now()
+        # コマンド送信
+        data = json.dumps(command) + "\n"
+        self.conn_file.write(data.encode('utf-8'))
+        self.conn_file.flush()
+        # レスポンス受信
+        resp = self.conn_file.readline().decode('utf-8')
+        res = json.loads(resp)
+        if not res.get('success'):
+            raise Exception(res.get('error'))
+        return res.get('result')
+
+    def cleanup(self):
+        try:
+            self.conn_file.write((json.dumps({'type':'terminate'}) + "\n").encode('utf-8'))
+            self.conn_file.flush()
+        except:
+            pass
+        try:
+            self.conn_file.close()
+        except:
+            pass
+
 class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, WorkerSession] = {}
@@ -465,10 +496,44 @@ class SessionManager:
         worker_path = os.path.join(root_dir, "worker.py")
         if not os.path.isfile(worker_path):
             raise Exception(f"worker.py が見つかりません: {worker_path}")
-        # サブプロセス起動
+        # Windows 環境では Task Scheduler + TCP ソケット IPC で起動
+        if platform.system() == 'Windows':
+            # TCP ソケットサーバーを起動し、ポートを取得
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock.bind(('127.0.0.1', 0))
+            server_sock.listen(1)
+            host, port = server_sock.getsockname()
+            # Task Scheduler 用コマンドを構築
+            task_name = f"MT5Worker_{session_id}"
+            cmd_args = [
+                sys.executable, worker_path,
+                "--id", session_id,
+                "--login", str(login),
+                "--password", password,
+                "--server", server,
+                "--exe-path", exe_path,
+                "--data-dir", data_dir,
+                "--ipc-port", str(port)
+            ]
+            cmd_line = '"' + '" "'.join(cmd_args) + '"'
+            # タスク登録（ONCE, 強制上書き）
+            subprocess.run([
+                "schtasks", "/Create", "/TN", task_name,
+                "/TR", cmd_line,
+                "/SC", "ONCE", "/ST", "00:00", "/RL", "HIGHEST", "/F"
+            ], check=True)
+            # タスクを即時実行
+            subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True)
+            # 子プロセスからの接続を待機
+            conn, _ = server_sock.accept()
+            conn_file = conn.makefile('rwb')
+            # IPC 用セッションを登録
+            session = WorkerSessionSocket(session_id, login, server, conn_file)
+            self.sessions[session_id] = session
+            return session_id
+        # Windows 以外は従来の STDIO 起動
         cmd = [
-            sys.executable,
-            worker_path,
+            sys.executable, worker_path,
             "--id", session_id,
             "--login", str(login),
             "--password", password,
@@ -476,13 +541,7 @@ class SessionManager:
             "--exe-path", exe_path,
             "--data-dir", data_dir
         ]
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True
-        )
-        # 即時にサブプロセスをセッションとして登録
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         session = WorkerSession(session_id, login, server, proc)
         self.sessions[session_id] = session
         return session_id
