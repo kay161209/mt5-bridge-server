@@ -376,6 +376,33 @@ def create_session_directory(session_id: str) -> Tuple[str, str]:
         shutil.rmtree(session_dir)
     # ポータブルインストールをセッションディレクトリへコピー（複数インスタンス起動用）
     shutil.copytree(settings.mt5_portable_path, session_dir)
+    # ========== メモリ節約設定 ==========
+    # 自動アップデート無効化とログ設定用 common.ini の作成
+    cfg_dir = os.path.join(session_dir, 'Config')
+    os.makedirs(cfg_dir, exist_ok=True)
+    common_ini = os.path.join(cfg_dir, 'common.ini')
+    with open(common_ini, 'w', encoding='utf-8') as f:
+        f.write('[General]\nSkipUpdate=1\n\n[Logs]\nLevel=error\nMaxLogSizeMB=1\n')
+    # チャートを空にして読み込まないように
+    charts_dir = os.path.join(session_dir, 'profiles', 'charts', 'Default')
+    if os.path.isdir(charts_dir):
+        for item in os.listdir(charts_dir):
+            path = os.path.join(charts_dir, item)
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+    # 不要なインジケータ・EA を削除
+    for sub in ('Experts', 'Indicators'):
+        mql_dir = os.path.join(session_dir, 'MQL5', sub)
+        if os.path.isdir(mql_dir):
+            for item in os.listdir(mql_dir):
+                fp = os.path.join(mql_dir, item)
+                if os.path.isdir(fp):
+                    shutil.rmtree(fp)
+                else:
+                    os.remove(fp)
+    # ====================================
     # セッションディレクトリ内の terminal64.exe を実行
     exe_path = os.path.join(session_dir, 'terminal64.exe')
     return exe_path, session_dir
