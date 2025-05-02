@@ -6,6 +6,7 @@ import argparse
 import platform
 import socket
 import io
+import psutil
 # MT5 モジュールのインポートを安全に行う
 try:
     import MetaTrader5 as mt5
@@ -44,14 +45,20 @@ def main():
         print(json.dumps({"type":"init","success":False,"error":err}), flush=True)
         sys.exit(1)
     # 初期化成功を親プロセスへ通知 (MT5 terminal64.exe の PID を含む)
-    term_info = mt5.terminal_info()
-    init_msg = {"type":"init","success":True,"error":None,"mt5_pid": term_info.pid}
+    # MT5 terminal64.exe のプロセスIDを探す
+    mt5_pid = None
+    if platform.system() == "Windows":
+        for p in psutil.process_iter(['exe', 'pid']):
+            exe_path = p.info.get('exe')
+            if exe_path and os.path.normcase(exe_path) == os.path.normcase(terminal_exe):
+                mt5_pid = p.info['pid']
+                break
+    init_msg = {"type":"init","success":True,"error":None,"mt5_pid": mt5_pid}
     # Windows環境でMetaTraderのウィンドウを非表示化
     if platform.system() == "Windows":
         try:
-            # 初期化済みのターミナルプロセスIDを取得
-            term_info = mt5.terminal_info()
-            pid = term_info.pid
+            # 初期化時に取得した MT5 プロセスIDを使用
+            pid = mt5_pid
             import ctypes
             # 定数・API定義
             SW_HIDE = 0
