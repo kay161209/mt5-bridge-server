@@ -3,7 +3,14 @@ import sys
 import os
 import json
 import argparse
-import MetaTrader5 as mt5
+import platform
+# MT5 モジュールのインポートを安全に行う
+try:
+    import MetaTrader5 as mt5
+except Exception as e:
+    # インポートに失敗したら親プロセスへエラーを通知して終了
+    print(json.dumps({"type":"init","success":False,"error":f"MetaTrader5 import error: {e}"}), flush=True)
+    sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -15,16 +22,25 @@ def main():
     parser.add_argument("--exe-path", required=True)
     args = parser.parse_args()
 
+    # macOS/Linux では WINEPREFIX をセッション固有ディレクトリに設定
+    if platform.system() != 'Windows':
+        os.environ['WINEPREFIX'] = args.data_dir
+        os.environ['WINEARCH'] = 'win64'
+
     terminal_exe = args.exe_path
+    config_path = args.data_dir
+    # MT5.initialize() にタイムアウト(60000ms=60秒)を指定して無限待ちを防止
     ok = mt5.initialize(
         path=terminal_exe,
         login=args.login, password=args.password, server=args.server,
-        portable=True, config_path=args.data_dir
+        portable=True, timeout=60000, config_path=config_path
     )
     if not ok:
         err = mt5.last_error()
+        # 初期化失敗を親プロセスへ通知（フラッシュ付き）
         print(json.dumps({"type":"init","success":False,"error":err}), flush=True)
         sys.exit(1)
+    # 初期化成功を親プロセスへ通知（フラッシュ付き）
     print(json.dumps({"type":"init","success":True,"error":None}), flush=True)
 
     for line in sys.stdin:
@@ -61,10 +77,14 @@ def main():
                 res.update({"success": False, "error": f"不明なコマンド: {cmd_type}"})
         except Exception as e:
             res.update({"success": False, "error": str(e)})
-        print(json.dumps(res))
-        sys.stdout.flush()
+        print(json.dumps(res), flush=True)
 
     mt5.shutdown()
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    except Exception as e:
+        # 予期せぬ例外を親プロセスへ通知
+        print(json.dumps({"type":"init","success":False,"error":str(e)}), flush=True)
+        sys.exit(1) 

@@ -5,7 +5,7 @@ import os
 import shutil
 import json
 import sys
-from typing import NamedTuple, Dict, Optional, Any, List
+from typing import NamedTuple, Dict, Optional, Any, List, Tuple
 from datetime import datetime, timedelta
 import logging
 import glob
@@ -367,20 +367,29 @@ def check_gui_status(pid: int) -> Dict[str, Any]:
     
     return result
 
-def create_session_directory(session_id: str) -> tuple[str, str]:
-    """セッション用データディレクトリを作成し、アカウント情報をコピー、MT5実行パスとデータディレクトリを返す"""
+def create_session_directory(session_id: str) -> Tuple[str, str]:
+    """セッション用データディレクトリを作成し、Config と accounts.dat のみコピーし、
+    MetaTrader5 実行ファイルのパスとセッションディレクトリを返す"""
     session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-    # 既存ディレクトリを削除して再作成
+    # 既存セッションディレクトリをクリア
     if os.path.exists(session_dir):
         shutil.rmtree(session_dir)
+    # セッションディレクトリ作成
     os.makedirs(session_dir, exist_ok=True)
-    # アカウント情報をコピー
+    # Config ディレクトリのみコピー（小容量）
+    config_src = os.path.join(settings.mt5_portable_path, 'Config')
+    config_dst = os.path.join(session_dir, 'Config')
+    if os.path.exists(config_src):
+        shutil.copytree(config_src, config_dst, dirs_exist_ok=True)
+    else:
+        logger.warning(f"Config ディレクトリが見つかりません: {config_src}")
+    # accounts.dat をコピー
     accounts_src = os.path.join(settings.mt5_portable_path, 'accounts.dat')
     if os.path.exists(accounts_src):
         shutil.copy2(accounts_src, os.path.join(session_dir, 'accounts.dat'))
     else:
-        logger.warning(f"アカウント情報(accounts.dat)が見つかりません: {accounts_src}")
-    # MT5 実行ファイルは共有インストールを使用
+        logger.warning(f"accounts.dat が見つかりません: {accounts_src}")
+    # 実行ファイルパスは共有ポータブルを参照
     exe_path = os.path.join(settings.mt5_portable_path, 'terminal64.exe')
     if not os.path.exists(exe_path):
         raise FileNotFoundError(f"terminal64.exe が見つかりません: {exe_path}")
@@ -437,15 +446,14 @@ class SessionManager:
         """新しいセッションを作成する"""
         # セッションIDをSHA256ハッシュで生成
         session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-        # MT5実行ファイルのパスとセッションディレクトリを取得
+        # MT5実行ファイルパスとセッションデータディレクトリを取得
         exe_path, data_dir = create_session_directory(session_id)
-        # data_dir は既に作成済み
         # worker.py の絶対パスを取得
         root_dir = os.path.dirname(os.path.dirname(__file__))
         worker_path = os.path.join(root_dir, "worker.py")
         if not os.path.isfile(worker_path):
             raise Exception(f"worker.py が見つかりません: {worker_path}")
-        # サブプロセス起動コマンドを構築
+        # サブプロセス起動
         cmd = [
             sys.executable,
             worker_path,
@@ -462,7 +470,7 @@ class SessionManager:
             stdout=subprocess.PIPE,
             text=True
         )
-        # WorkerSession を生成・登録
+        # 即時にサブプロセスをセッションとして登録
         session = WorkerSession(session_id, login, server, proc)
         self.sessions[session_id] = session
         return session_id
