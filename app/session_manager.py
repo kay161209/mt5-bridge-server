@@ -520,14 +520,12 @@ class SessionManager:
             with open(bat_path, 'w', encoding='utf-8') as bat_file:
                 bat_file.write(bat_content)
             # タスク登録（ONCE, 強制上書き）※実行ユーザーと開始時間を動的に設定
-            # 実行ユーザーを環境変数で指定、なければドメイン\ユーザー形式を自動構築
+            # 実行ユーザーを環境変数で指定、なければローカルユーザーの .\username 形式で指定
             env_user = os.getenv('MT5_TASK_RUN_USER')
             if env_user:
                 run_user = env_user
             else:
-                domain = os.getenv('USERDOMAIN') or os.getenv('COMPUTERNAME')
-                user = getpass.getuser()
-                run_user = f"{domain}\\{user}"
+                run_user = f".\\{getpass.getuser()}"
             run_password = os.getenv('MT5_TASK_RUN_PASSWORD')
             # 開始時刻を現在時刻＋1分に設定（HH:mm）
             start_time = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
