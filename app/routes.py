@@ -166,7 +166,8 @@ def session_get_candles(session_id: str, req: CandleRequest, x_api_token: str | 
         "count": req.count
     }
     if req.start_time:
-        params["start_time"] = req.start_time
+        # datetime を UNIX タイムスタンプ (秒) に変換して JSON シリアライズ可能にする
+        params["start_time"] = int(req.start_time.timestamp())
     result = session.send_command({"type": "candles", "params": params})
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error"))
