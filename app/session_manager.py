@@ -20,9 +20,6 @@ import select
 import signal
 from app.config import settings
 import hashlib
-import socket
-import getpass
-import threading
 
 # 安全なストリームラッパー
 def safe_wrap_stream(stream, encoding='utf-8'):
@@ -449,36 +446,6 @@ class WorkerSession:
         except Exception:
             pass
 
-class WorkerSessionSocket(WorkerSession):
-    """TCP ソケット経由で JSON コマンドを送受信するセッション"""
-    def __init__(self, session_id: str, login: int, server: str, conn_file):
-        super().__init__(session_id, login, server, proc=None)
-        self.conn_file = conn_file
-
-    def send_command(self, command: dict) -> Any:
-        self.last_access = datetime.now()
-        # コマンド送信
-        data = json.dumps(command) + "\n"
-        self.conn_file.write(data.encode('utf-8'))
-        self.conn_file.flush()
-        # レスポンス受信
-        resp = self.conn_file.readline().decode('utf-8')
-        res = json.loads(resp)
-        if not res.get('success'):
-            raise Exception(res.get('error'))
-        return res.get('result')
-
-    def cleanup(self):
-        try:
-            self.conn_file.write((json.dumps({'type':'terminate'}) + "\n").encode('utf-8'))
-            self.conn_file.flush()
-        except:
-            pass
-        try:
-            self.conn_file.close()
-        except:
-            pass
-
 class SessionManager:
     def __init__(self):
         self.sessions: Dict[str, WorkerSession] = {}
@@ -498,7 +465,7 @@ class SessionManager:
         worker_path = os.path.join(root_dir, "worker.py")
         if not os.path.isfile(worker_path):
             raise Exception(f"worker.py が見つかりません: {worker_path}")
-        # 起動コマンド（STDIO フォールバック用）
+        # Worker を標準IOで起動
         cmd = [
             sys.executable, worker_path,
             "--id", session_id,
@@ -508,65 +475,6 @@ class SessionManager:
             "--exe-path", exe_path,
             "--data-dir", data_dir
         ]
-        # Windows 環境では Task Scheduler + TCP ソケット IPC を試行
-        if platform.system() == 'Windows':
-            try:
-                # TCP ソケットサーバーを起動し、ポートを取得
-                server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                server_sock.bind(('127.0.0.1', 0))
-                server_sock.listen(1)
-                host, port = server_sock.getsockname()
-                # Task Scheduler 用バッチファイルを作成（/TR の長さ制限回避）
-                task_name = f"MT5Worker_{session_id}"
-                bat_path = os.path.join(data_dir, f"run_{session_id}.bat")
-                bat_content = ' '.join([
-                    f'"{sys.executable}"', f'"{worker_path}"',
-                    "--id", session_id,
-                    "--login", str(login),
-                    "--password", password,
-                    "--server", server,
-                    "--exe-path", f'"{exe_path}"',
-                    "--data-dir", f'"{data_dir}"',
-                    "--ipc-port", str(port)
-                ])
-                with open(bat_path, 'w', encoding='utf-8') as bat_file:
-                    bat_file.write(bat_content)
-                # タスク登録の準備（インタラクティブ実行）
-                run_user = os.getenv('MT5_TASK_RUN_USER')
-                if not run_user:
-                    raise Exception(
-                        "環境変数 MT5_TASK_RUN_USER にインタラクティブユーザー名を設定してください。"
-                        "例: 'Keiichiro'"
-                    )
-                # 開始時刻を現在時刻＋1分に設定
-                start_time = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
-                # インタラクティブ実行タスクを作成（/RP を除外し /IT を追加）
-                schtasks_cmd = [
-                    "schtasks", "/Create", "/TN", task_name,
-                    "/TR", f'\"{bat_path}\"',
-                    "/SC", "ONCE", "/ST", start_time,
-                    "/RL", "HIGHEST",
-                    "/RU", run_user,
-                    "/IT",
-                    "/F"
-                ]
-                # タスクを登録して即時実行
-                subprocess.run(schtasks_cmd, check=True)
-                subprocess.run(["schtasks", "/Run", "/TN", task_name], check=True)
-                # 子プロセス接続待ちをバックグラウンドで受け付ける
-                def _accept_worker():
-                    try:
-                        conn, _ = server_sock.accept()
-                        conn_file = conn.makefile('rwb')
-                        session = WorkerSessionSocket(session_id, login, server, conn_file)
-                        self.sessions[session_id] = session
-                    finally:
-                        server_sock.close()
-                threading.Thread(target=_accept_worker, daemon=True).start()
-                return session_id
-            except Exception as e:
-                logger.warning(f"Task Scheduler 起動失敗: {e} - STDIO spawn にフォールバックします")
-        # Windows 以外、あるいはフォールバック時は従来の STDIO 起動
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         session = WorkerSession(session_id, login, server, proc)
         self.sessions[session_id] = session
