@@ -9,7 +9,9 @@ from app.models import (
     TicksRequest, TicksRangeRequest, TicksResponse, OrderRequest, OrderCheckResponse,
     OrderSendResponse, PositionsRequest, PositionsResponse, HistoryOrdersRequest,
     HistoryOrdersResponse, HistoryDealsRequest, HistoryDealsResponse, CandlesRangeRequest,
-    SessionCreateRequest, SessionCreateResponse, SessionsListResponse
+    SessionCreateRequest, SessionCreateResponse, SessionsListResponse,
+    PositionCloseRequest, PositionClosePartialRequest, PositionModifyRequest,
+    OrderCancelRequest, OrderModifyRequest
 )
 from app.session_manager import get_session_manager
 from typing import List, Optional, Dict, Any
@@ -193,7 +195,7 @@ def get_candles(req: CandleRequest, x_api_token: str | None = Header(None)):
         symbol=req.symbol,
         timeframe=req.timeframe,
         count=req.count,
-        start_time=req.start_time
+        start_time=req.start_time if req.start_time else None
     )
     return {"data": candles}
 
@@ -231,7 +233,7 @@ def get_symbols_total(x_api_token: str | None = Header(None)):
     return {"total": mt5.get_symbols_total()}
 
 @router.post("/public/symbols")
-def get_symbols(req: SymbolsRequest = None, x_api_token: str | None = Header(None)):
+def get_symbols(req: Optional[SymbolsRequest] = None, x_api_token: str | None = Header(None)):
     check_token(x_api_token)
     group = req.group if req else None
     return {"symbols": mt5.get_symbols(group)}
@@ -411,6 +413,43 @@ def get_history_deals(req: HistoryDealsRequest, x_api_token: str | None = Header
     )
     return {"deals": deals}
 
+
+@router.post("/private/position/close")
+def position_close(req: PositionCloseRequest, x_api_token: str | None = Header(None)):
+    """ポジションを閉じる"""
+    check_token(x_api_token)
+    result = mt5.position_close(req.symbol, req.ticket)
+    return result
+
+@router.post("/private/position/close_partial")
+def position_close_partial(req: PositionClosePartialRequest, x_api_token: str | None = Header(None)):
+    """ポジションを部分的に閉じる"""
+    check_token(x_api_token)
+    result = mt5.position_close_partial(req.ticket, req.volume)
+    return result
+
+@router.post("/private/position/modify")
+def position_modify(req: PositionModifyRequest, x_api_token: str | None = Header(None)):
+    """ポジションのSL/TPを変更する"""
+    check_token(x_api_token)
+    result = mt5.position_modify(req.ticket, req.sl, req.tp)
+    return result
+
+
+@router.post("/private/order/cancel")
+def order_cancel(req: OrderCancelRequest, x_api_token: str | None = Header(None)):
+    """注文をキャンセルする"""
+    check_token(x_api_token)
+    result = mt5.order_cancel(req.ticket)
+    return result
+
+@router.post("/private/order/modify")
+def order_modify(req: OrderModifyRequest, x_api_token: str | None = Header(None)):
+    """注文を変更する"""
+    check_token(x_api_token)
+    result = mt5.order_modify(req.ticket, req.price, req.sl, req.tp, req.expiration)
+    return result
+
 # ---- WebSocket ---- #
 
 @router.websocket("/ws/{session_id}")
@@ -460,4 +499,4 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         try:
             await websocket.close(code=1011)
         except:
-            pass 
+            pass        
