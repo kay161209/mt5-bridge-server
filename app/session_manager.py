@@ -424,7 +424,11 @@ class WorkerSession:
         self.last_access = datetime.now()
         # JSON 送信
         self.proc.stdin.write(json.dumps(command) + "\n")
-        self.proc.stdin.flush()
+        try:
+            self.proc.stdin.flush()
+        except OSError:
+            # In Windows, flushing a closed pipe may raise Invalid argument; ignore
+            pass
         # 応答受信
         line = self.proc.stdout.readline()
         res = json.loads(line)

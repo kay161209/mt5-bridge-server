@@ -82,15 +82,41 @@ def main():
                 else:
                     rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
                 if rates is None or len(rates) == 0:
-                    result = []
+                    result_list = []
                 else:
-                    result = [
+                    result_list = [
                         {"time": r['time'], "open": r['open'], "high": r['high'], "low": r['low'], "close": r['close'], "tick_volume": r['tick_volume']}
                         for r in rates
                     ]
-                res.update({"success": True, "result": result})
+                res.update({"success": True, "result": result_list})
+            elif cmd_type == "order_send":
+                result = mt5.order_send(**params)
+                if result is None:
+                    error = mt5.last_error()
+                    res.update({"success": False, "error": f"order_sendに失敗: {error}"})
+                else:
+                    res.update({"success": True, "result": result._asdict()})
+            elif cmd_type == "quote":
+                tick = mt5.symbol_info_tick(params.get("symbol"))
+                if tick is None:
+                    error = mt5.last_error()
+                    res.update({"success": False, "error": f"quoteに失敗: {error}"})
+                else:
+                    res.update({"success": True, "result": {"bid": tick.bid, "ask": tick.ask, "time": tick.time}})
+            elif cmd_type == "positions_get":
+                result = mt5.positions_get(**params)
+                positions_list = [pos._asdict() for pos in result] if result else []
+                res.update({"success": True, "result": positions_list})
+            elif cmd_type == "symbol_select":
+                symbol = params.get("symbol")
+                enable = params.get("enable", True)
+                ok = mt5.symbol_select(symbol, enable)
+                if ok:
+                    res.update({"success": True, "result": None})
+                else:
+                    error = mt5.last_error()
+                    res.update({"success": False, "error": f"symbol_selectに失敗: {error}"})
             else:
-                # 他のコマンドは必要に応じて拡張
                 res.update({"success": False, "error": f"不明なコマンド: {cmd_type}"})
         except Exception as e:
             res.update({"success": False, "error": str(e)})
