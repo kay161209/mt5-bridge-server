@@ -417,6 +417,7 @@ class WorkerSession:
         self.created_at = datetime.now()
         self.last_access = self.created_at
         self.proc = proc
+        self.mt5_pid: Optional[int] = None  # 初期化時に設定
 
     def send_command(self, command: dict) -> Any:
         """子プロセスに JSON コマンドを送信し、結果を返す"""
@@ -487,7 +488,14 @@ class SessionManager:
             "--data-dir", data_dir
         ]
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        # 初期化メッセージから MT5 terminal64.exe の PID を取得
+        init_line = proc.stdout.readline()
+        init_data = json.loads(init_line)
+        if not init_data.get("success"):
+            raise Exception(f"MT5 初期化失敗: {init_data.get('error')}")
+        mt5_pid = init_data.get("mt5_pid")
         session = WorkerSession(session_id, login, server, proc)
+        session.mt5_pid = mt5_pid
         self.sessions[session_id] = session
         return session_id
 
@@ -496,24 +504,16 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.cleanup()
-            # MT5ターミナル含む、セッションディレクトリ内のプロセスを強制終了
-            session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
-            for proc in psutil.process_iter(['exe']):
+            # MT5 terminal64.exe プロセスを PID で強制終了
+            if session.mt5_pid:
                 try:
-                    exe = proc.info.get('exe')
-                    # 実行ファイルパスがセッション用ディレクトリ内にある場合にkill
-                    if exe and os.path.normcase(session_dir) in os.path.normcase(exe):
-                        proc.kill()
-                        proc.wait(timeout=5)
-                except Exception:
-                    pass
-            # フォールバック: Windows環境で terminal64.exe を強制終了
-            if platform.system() == 'Windows':
-                try:
-                    subprocess.run(['taskkill', '/F', '/IM', 'terminal64.exe'], check=False)
+                    proc = psutil.Process(session.mt5_pid)
+                    proc.kill()
+                    proc.wait(timeout=5)
                 except Exception:
                     pass
             # セッションディレクトリを削除
+            session_dir = os.path.join(settings.sessions_base_path, f"session_{session_id}")
             if os.path.isdir(session_dir):
                 shutil.rmtree(session_dir, ignore_errors=True)
 

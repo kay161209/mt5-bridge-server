@@ -43,8 +43,9 @@ def main():
         # 初期化失敗を親プロセスへ通知（フラッシュ付き）
         print(json.dumps({"type":"init","success":False,"error":err}), flush=True)
         sys.exit(1)
-    # 初期化成功を親プロセスへ通知
-    init_msg = {"type":"init","success":True,"error":None}
+    # 初期化成功を親プロセスへ通知 (MT5 terminal64.exe の PID を含む)
+    term_info = mt5.terminal_info()
+    init_msg = {"type":"init","success":True,"error":None,"mt5_pid": term_info.pid}
     # Windows環境でMetaTraderのウィンドウを非表示化
     if platform.system() == "Windows":
         try:
@@ -147,18 +148,7 @@ def main():
         out_stream.flush()
 
     mt5.shutdown()
-    # Windows環境: MetaTrader ターミナルプロセスを終了
-    if platform.system() == "Windows":
-        try:
-            # プロセスIDを取得・kill
-            term_info = mt5.terminal_info()
-            pid = term_info.pid
-            import psutil
-            proc = psutil.Process(pid)
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:
-            pass
+    # MT5 terminal64.exe の終了は SessionManager で行います
 
 if __name__ == "__main__":
     try:
