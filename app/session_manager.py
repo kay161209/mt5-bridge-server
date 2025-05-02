@@ -3,25 +3,22 @@ import subprocess
 import time
 import os
 import shutil
-from typing import NamedTuple, Dict, Optional, Any, Tuple, List
-import MetaTrader5 as mt5
+import json
+import sys
+from typing import NamedTuple, Dict, Optional, Any, List
 from datetime import datetime, timedelta
 import logging
 import glob
 import zipfile
 import io
-import sys
 import traceback
-import json
 import platform
 import atexit
 import psutil
 from pathlib import Path
 import select
-from multiprocessing import Process, Pipe
 import signal
 from app.config import settings
-from app.mt5_session_process import start_session_process
 import hashlib
 
 # 安全なストリームラッパー
@@ -430,185 +427,50 @@ def create_session_directory(session_id: str) -> str:
                 logger.error(f"セッションディレクトリのクリーンアップ中にエラーが発生: {str(cleanup_error)}")
         raise
 
-class MT5Session:
-    def __init__(self, session_id: str, login: int, password: str, server: str):
-        """MT5セッションの初期化"""
+# WorkerSession: 完全独立プロセスで動作する MT5 セッションラッパー
+class WorkerSession:
+    """サブプロセスで MT5 を初期化・コマンド処理するセッション"""
+    def __init__(self, session_id: str, login: int, server: str, proc: subprocess.Popen):
         self.session_id = session_id
         self.login = login
-        self.password = password
         self.server = server
-        self.last_access = datetime.now()
-        self.initialized = False
-        self.process = None
-        self.parent_conn = None
-        self.child_conn = None
-        self.session_path = None
-        self.initialize()
+        self.created_at = datetime.now()
+        self.last_access = self.created_at
+        self.proc = proc
 
-    def initialize(self) -> bool:
-        """MT5の初期化とログイン（別プロセスで実行）"""
-        try:
-            # セッション用のディレクトリを作成
-            self.session_path = create_session_directory(self.session_id)
-            
-            # プロセス間通信用のパイプを作成
-            self.parent_conn, self.child_conn = Pipe()
-            
-            # 新しいプロセスでMT5を起動
-            self.process = Process(
-                target=start_session_process,
-                args=(self.session_id, self.session_path, self.child_conn)
-            )
-            self.process.start()
-            
-            # プロセスの起動を確認
-            if not self.process.is_alive():
-                logger.error("MT5プロセスの起動に失敗しました")
-                return False
-                
-            logger.info(f"MT5プロセスを起動しました（PID: {self.process.pid}）")
-            
-            # 初期化コマンドを送信
-            init_command = {
-                "type": "initialize",
-                "params": {
-                    "login": self.login,
-                    "password": self.password,
-                    "server": self.server
-                }
-            }
-            
-            # コマンド送信前にパイプの状態を確認
-            if not self.parent_conn.writable:
-                logger.error("パイプが書き込み不可の状態です")
-                self.cleanup()
-                return False
-                
-            self.parent_conn.send(init_command)
-            logger.info("初期化コマンドを送信しました")
-            
-            # 結果を待機（タイムアウトを90秒に延長）
-            start_time = time.time()
-            timeout = 90  # 90秒のタイムアウト
-            
-            while time.time() - start_time < timeout:
-                if self.parent_conn.poll(1):  # 1秒ごとにチェック
-                    result = self.parent_conn.recv()
-                    if result.get("success"):
-                        self.initialized = True
-                        logger.info(f"MT5初期化とログイン成功 - セッション: {self.session_id}")
-                        return True
-                    else:
-                        error_msg = result.get("error", "不明なエラー")
-                        logger.error(f"MT5初期化エラー: {error_msg}")
-                        self.cleanup()
-                        return False
-                
-                # プロセスの生存確認
-                if not self.process.is_alive():
-                    logger.error("MT5プロセスが予期せず終了しました")
-                    self.cleanup()
-                    return False
-                    
-                # 進捗ログ
-                if (time.time() - start_time) % 10 < 1:  # 10秒ごとに進捗を表示
-                    logger.info(f"MT5初期化待機中... 経過時間: {int(time.time() - start_time)}秒")
-            
-            logger.error("MT5初期化がタイムアウトしました")
-            self.cleanup()
-            return False
-                
-        except Exception as e:
-            logger.error(f"MT5初期化中の例外: {e}", exc_info=True)
-            self.cleanup()
-            return False
+    def send_command(self, command: dict) -> Any:
+        """子プロセスに JSON コマンドを送信し、結果を返す"""
+        # 最終アクセス時間更新
+        self.last_access = datetime.now()
+        # JSON 送信
+        self.proc.stdin.write(json.dumps(command) + "\n")
+        self.proc.stdin.flush()
+        # 応答受信
+        line = self.proc.stdout.readline()
+        res = json.loads(line)
+        if not res.get("success"):
+            raise Exception(res.get("error"))
+        return res.get("result")
 
     def cleanup(self):
-        """セッションのクリーンアップ処理"""
+        """子プロセスの終了処理"""
         try:
-            if self.parent_conn:
-                # 終了コマンドを送信
-                try:
-                    self.parent_conn.send({"type": "terminate"})
-                except:
-                    pass
-                self.parent_conn.close()
-                
-            if self.child_conn:
-                self.child_conn.close()
-                
-            # 子プロセスの終了を待機
-            if self.process:
-                # 最大10秒待って終了
-                self.process.join(timeout=10)
-                if self.process.is_alive():
-                    logger.warning(f"子プロセスが停止しないため強制終了: PID {self.process.pid}")
-                    self.process.terminate()
-                    self.process.join(timeout=5)
-                    if self.process.is_alive():
-                        logger.warning(f"子プロセスがまだ残存しているためkill: PID {self.process.pid}")
-                        self.process.kill()
-
-            # 対応するterminal64プロセスが残っていれば終了
-            if self.session_path:
-                try:
-                    for proc in psutil.process_iter(['pid', 'exe']):
-                        exe = proc.info.get('exe') or ''
-                        if os.path.normcase(exe) == os.path.normcase(self.session_path):
-                            logger.info(f"ターミナルプロセスを終了します: PID {proc.pid}")
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=5)
-                            except psutil.TimeoutExpired:
-                                logger.warning(f"ターミナルプロセス終了タイムアウト、kill: PID {proc.pid}")
-                                proc.kill()
-                except Exception as e:
-                    logger.warning(f"terminal64プロセス終了時にエラー: {e}")
-            
-            # セッションディレクトリの削除（最大3回までPermissionErrorリトライ）
-            if self.session_path:
-                session_dir = os.path.dirname(os.path.dirname(self.session_path))
-                for attempt in range(3):
-                    try:
-                        shutil.rmtree(session_dir)
-                        break
-                    except PermissionError as e:
-                        logger.warning(f"ファイル/ディレクトリが使用中のため再試行します ({attempt+1}/3): {e}")
-                        time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"セッションディレクトリの削除時に予期せぬエラー: {e}", exc_info=True)
-                        break
-                else:
-                    logger.error(f"セッションディレクトリの削除に失敗しました: {session_dir}")
-        except Exception as e:
-            logger.error(f"セッションクリーンアップ中のエラー: {e}")
-        finally:
-            self.initialized = False
-            self.process = None
-            self.parent_conn = None
-            self.child_conn = None
-            self.session_path = None
-
-    def send_command(self, command: Dict[str, Any]) -> Any:
-        """コマンドを子プロセスに送信"""
-        if not self.initialized or not self.parent_conn:
-            raise Exception("セッションが初期化されていないか、すでに終了しています")
-            
+            # 終了コマンド送信
+            self.proc.stdin.write(json.dumps({"type":"terminate"}) + "\n")
+            self.proc.stdin.flush()
+        except Exception:
+            pass
         try:
-            self.parent_conn.send(command)
-            if self.parent_conn.poll(timeout=30):  # 30秒でタイムアウト
-                return self.parent_conn.recv()
-            else:
-                raise Exception("コマンド実行がタイムアウトしました")
-        except Exception as e:
-            logger.error(f"コマンド送信中のエラー: {e}")
-            raise
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            pass
 
 class SessionManager:
     def __init__(self):
-        self.sessions: Dict[str, MT5Session] = {}
+        self.sessions: Dict[str, WorkerSession] = {}
 
-    def get_session(self, session_id: str) -> Optional[MT5Session]:
+    def get_session(self, session_id: str) -> Optional[WorkerSession]:
         """セッションを取得する"""
         return self.sessions.get(session_id)
 
@@ -616,20 +478,41 @@ class SessionManager:
         """新しいセッションを作成する"""
         # セッションIDをSHA256ハッシュで生成
         session_id = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-        session = MT5Session(session_id, login, password, server)
-        
-        if not session.initialized:
-            raise Exception("MT5の初期化に失敗しました")
-            
+        # セッション用ディレクトリの作成
+        session_dir = create_session_directory(session_id)
+        # worker.py スクリプトをサブプロセスとして起動
+        cmd = [
+            sys.executable,
+            os.path.join(os.getcwd(), "worker.py"),
+            "--id", session_id,
+            "--login", str(login),
+            "--password", password,
+            "--server", server,
+            "--data-dir", session_dir
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            cwd=session_dir,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True
+        )
+        # 初期化結果を待機
+        init_line = proc.stdout.readline()
+        init_res = json.loads(init_line)
+        if not init_res.get("success"):
+            proc.terminate()
+            raise Exception(f"MT5初期化失敗: {init_res.get('error')}")
+        # WorkerSession を生成・登録
+        session = WorkerSession(session_id, login, server, proc)
         self.sessions[session_id] = session
         return session_id
 
     def cleanup_session(self, session_id: str) -> None:
         """指定されたセッションをクリーンアップする"""
-        session = self.sessions.get(session_id)
+        session = self.sessions.pop(session_id, None)
         if session:
             session.cleanup()
-            del self.sessions[session_id]
 
     def cleanup_old_sessions(self, max_age_seconds: int = 3600) -> List[str]:
         """古いセッションをクリーンアップする
