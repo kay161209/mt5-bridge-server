@@ -379,6 +379,7 @@ class SessionResponse(BaseModel):
     age_seconds: float
 
 class SessionsListResponse(BaseModel):
+    pass
 
 class PositionCloseRequest(BaseModel):
     symbol: str
