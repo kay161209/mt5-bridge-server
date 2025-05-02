@@ -115,36 +115,38 @@ def close_all_sessions(x_api_token: str | None = Header(None), background_tasks:
 
 # ----- セッションIDを指定するバージョンのエンドポイント ----- #
 
-@router.post("/{session_id}/order/create", response_model=OrderResponse)
+@router.post("/session/{session_id}/order/create", response_model=OrderResponse)
 def session_order_create(session_id: str, req: OrderCreate, x_api_token: str | None = Header(None)):
     """指定セッションで注文を発注"""
     check_token(x_api_token)
     
     # セッションを取得
-    try:
-        session_manager = get_session_manager()
-        session_manager.get_session(session_id)
-    except KeyError:
+    session = get_session_manager().get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
-    
-    # セッションではMT5はすでに初期化されているので、直接注文発注
-    result = mt5.place_order(req)
-    code = 0 if result > 0 else -1
-    return {"retCode": code, "result": {"ticket": result}}
+    # MT5命令を送信
+    params = req.dict()
+    cmd_res = session.send_command({"type": "order_send", "params": params})
+    if not cmd_res.get("success"):
+        raise HTTPException(status_code=500, detail=cmd_res.get("error"))
+    res = cmd_res.get("result") or {}
+    # retCode として retcode フィールドを利用
+    return {"retCode": res.get("retcode", -1), "result": res}
 
-@router.get("/{session_id}/quote")
+@router.get("/session/{session_id}/quote")
 def session_quote(session_id: str, symbol: str, x_api_token: str | None = Header(None)):
     """指定セッションで価格を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    try:
-        session_manager = get_session_manager()
-        session_manager.get_session(session_id)
-    except KeyError:
+    session = get_session_manager().get_session(session_id)
+    if not session:
         raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
-    
-    return mt5.get_price(symbol)
+    # MT5命令を送信
+    cmd_res = session.send_command({"type": "quote", "params": {"symbol": symbol}})
+    if not cmd_res.get("success"):
+        raise HTTPException(status_code=500, detail=cmd_res.get("error"))
+    return cmd_res.get("result")
 
 @router.post("/session/{session_id}/candles", response_model=CandleResponse)
 def session_get_candles(session_id: str, req: CandleRequest, x_api_token: str | None = Header(None)):

@@ -174,6 +174,15 @@ class MT5SessionProcess:
                     })
                 return {'success': True, 'result': result}
             
+            elif cmd_type == 'quote':
+                # ティック情報（現在価格）を取得
+                symbol = params.get('symbol')
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    error = mt5.last_error()
+                    return {'success': False, 'error': f'quoteに失敗: {error}'}
+                return {'success': True, 'result': {'bid': tick.bid, 'ask': tick.ask, 'time': tick.time}}
+            
             return {'success': False, 'error': f'不明なコマンド: {cmd_type}'}
             
         except Exception as e:
