@@ -193,7 +193,7 @@ def get_candles(req: CandleRequest, x_api_token: str | None = Header(None)):
         symbol=req.symbol,
         timeframe=req.timeframe,
         count=req.count,
-        start_time=req.start_time
+        start_time=req.start_time if req.start_time else None
     )
     return {"data": candles}
 
@@ -231,7 +231,7 @@ def get_symbols_total(x_api_token: str | None = Header(None)):
     return {"total": mt5.get_symbols_total()}
 
 @router.post("/public/symbols")
-def get_symbols(req: SymbolsRequest = None, x_api_token: str | None = Header(None)):
+def get_symbols(req: Optional[SymbolsRequest] = None, x_api_token: str | None = Header(None)):
     check_token(x_api_token)
     group = req.group if req else None
     return {"symbols": mt5.get_symbols(group)}
@@ -460,4 +460,4 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         try:
             await websocket.close(code=1011)
         except:
-            pass 
+            pass    

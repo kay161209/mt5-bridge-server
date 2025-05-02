@@ -24,7 +24,7 @@ def check_env_var(env_var, default=None, var_type=str):
             return default
         logger.warning(f"環境変数 {env_var} が設定されておらず、デフォルト値もありません。")
         return None
-    
+
     try:
         if var_type == bool:
             return value.lower() in ('true', 'yes', 'y', '1')
@@ -71,23 +71,23 @@ os.makedirs(logs_dir, exist_ok=True)
 class Settings(BaseSettings):
     # API認証設定
     bridge_token: str = "development_token"
-    
+
     # MT5設定
     mt5_portable_path: str = mt5_portable_path
     mt5_login: int = 0
     mt5_password: str = ""
     mt5_server: str = ""
-    
+
     # セッション管理設定
     sessions_base_path: str = sessions_base_path
     session_inactive_timeout: int = 3600
     cleanup_interval: int = 60
     max_session_age_hours: int = 24
     session_cleanup_interval_minutes: int = 30
-    
+
     # WebSocket設定
     ws_broadcast_interval: float = 1.0
-    
+
     # ログレベル設定
     log_level: str = "INFO"
 

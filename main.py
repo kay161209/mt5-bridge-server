@@ -210,9 +210,9 @@ async def cleanup_old_sessions():
     """Background task to clean up expired sessions"""
     try:
         session_manager = get_session_manager()
-        count = session_manager.cleanup_old_sessions(max_age_seconds=settings.session_inactive_timeout)
-        if count > 0:
-            logger.info(f"Cleaned up {count} expired sessions")
+        expired_sessions = session_manager.cleanup_old_sessions(max_age_seconds=settings.session_inactive_timeout)
+        if expired_sessions and len(expired_sessions) > 0:
+            logger.info(f"Cleaned up {len(expired_sessions)} expired sessions")
     except Exception as e:
         logger.error(f"Session cleanup error: {e}")
 
@@ -224,19 +224,46 @@ async def cleanup_old_sessions():
 #     result = order_send({...})
 #     return {"retCode":0,"result":result}
 
-@app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
-    await ws.accept()
+@app.websocket("/ws/{session_id}")
+async def ws_endpoint(ws: WebSocket, session_id: str):
+    """WebSocketエンドポイント - セッションベースの実装"""
     try:
         token = ws.query_params.get("token")
         if token != settings.bridge_token:
             await ws.close(code=4001)
             return
         
-        # WebSocket session needs to be changed to session-based
-        # This is a simple implementation that just responds to pings
+        await ws.accept()
+        
+        session_manager = get_session_manager()
+        session = session_manager.get_session(session_id)
+        
+        if not session:
+            logger.error(f"セッションが見つかりません: {session_id}")
+            await ws.close(code=4004)
+            return
+        
+        # WebSocketループ
         while True:
-            data = await ws.receive_text()
-            await ws.send_text("pong:"+data)
-    except WebSocketDisconnect:
-        pass
+            try:
+                command = await ws.receive_json()
+                
+                result = session.send_command(command)
+                
+                await ws.send_json(result)
+                
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket接続が切断されました: session_id={session_id}")
+                break
+            except Exception as e:
+                logger.error(f"WebSocketエラー: {e}")
+                await ws.send_json({
+                    "success": False,
+                    "error": str(e)
+                })
+    except Exception as e:
+        logger.error(f"WebSocket処理エラー: {e}")
+        try:
+            await ws.close(code=1011)
+        except:
+            pass

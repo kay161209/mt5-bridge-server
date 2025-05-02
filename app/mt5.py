@@ -55,7 +55,7 @@ def get_symbols_total() -> int:
     """利用可能な金融商品の数を取得"""
     return mt5.symbols_total()
 
-def get_symbols(group: str = None) -> List[dict]:
+def get_symbols(group: Optional[str] = None) -> List[dict]:
     """
     金融商品のリストを取得
     
@@ -202,7 +202,7 @@ def get_price(symbol: str):
     tick = mt5.symbol_info_tick(symbol)
     return {"bid": tick.bid, "ask": tick.ask, "time": tick.time} 
 
-def get_candles(symbol: str, timeframe: str, count: int = 100, start_time: datetime = None):
+def get_candles(symbol: str, timeframe: str, count: int = 100, start_time: Optional[datetime] = None):
     """
     指定したシンボルとタイムフレームのローソク足データを取得
     
@@ -359,7 +359,7 @@ def get_orders_total() -> int:
     """アクティブな注文の総数を取得"""
     return mt5.orders_total()
 
-def get_orders(symbol: str = None, group: str = None, ticket: int = None) -> List[dict]:
+def get_orders(symbol: Optional[str] = None, group: Optional[str] = None, ticket: Optional[int] = None) -> List[dict]:
     """
     アクティブな注文のリストを取得
     
@@ -483,7 +483,7 @@ def get_positions_total() -> int:
     """オープンポジションの総数を取得"""
     return mt5.positions_total()
 
-def get_positions(symbol: str = None, group: str = None, ticket: int = None) -> List[dict]:
+def get_positions(symbol: Optional[str] = None, group: Optional[str] = None, ticket: Optional[int] = None) -> List[dict]:
     """
     オープンポジションのリストを取得
     
@@ -510,12 +510,12 @@ def get_positions(symbol: str = None, group: str = None, ticket: int = None) -> 
     
     return result
 
-def get_history_orders_total(date_from: datetime = None, date_to: datetime = None) -> int:
+def get_history_orders_total(date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> int:
     """履歴注文の総数を取得"""
     return mt5.history_orders_total(date_from, date_to)
 
-def get_history_orders(date_from: datetime = None, date_to: datetime = None, group: str = None, 
-                      ticket: int = None, position: int = None) -> List[dict]:
+def get_history_orders(date_from: Optional[datetime] = None, date_to: Optional[datetime] = None, group: Optional[str] = None, 
+                      ticket: Optional[int] = None, position: Optional[int] = None) -> List[dict]:
     """
     履歴注文のリストを取得
     
@@ -544,12 +544,12 @@ def get_history_orders(date_from: datetime = None, date_to: datetime = None, gro
     
     return result
 
-def get_history_deals_total(date_from: datetime = None, date_to: datetime = None) -> int:
+def get_history_deals_total(date_from: Optional[datetime] = None, date_to: Optional[datetime] = None) -> int:
     """取引履歴の総数を取得"""
     return mt5.history_deals_total(date_from, date_to)
 
-def get_history_deals(date_from: datetime = None, date_to: datetime = None, group: str = None, 
-                     ticket: int = None, position: int = None) -> List[dict]:
+def get_history_deals(date_from: Optional[datetime] = None, date_to: Optional[datetime] = None, group: Optional[str] = None, 
+                     ticket: Optional[int] = None, position: Optional[int] = None) -> List[dict]:
     """
     取引履歴のリストを取得
     
@@ -576,4 +576,4 @@ def get_history_deals(date_from: datetime = None, date_to: datetime = None, grou
                 deal_dict[prop] = getattr(deal, prop)
         result.append(deal_dict)
     
-    return result 
+    return result      
