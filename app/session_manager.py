@@ -531,26 +531,23 @@ class SessionManager:
                 ])
                 with open(bat_path, 'w', encoding='utf-8') as bat_file:
                     bat_file.write(bat_content)
-                # タスク登録の準備
+                # タスク登録の準備（インタラクティブ実行）
                 run_user = os.getenv('MT5_TASK_RUN_USER')
                 if not run_user:
                     raise Exception(
-                        "環境変数 MT5_TASK_RUN_USER に実行ユーザー名を設定してください。"
-                        "例: 'Keiichiro' または 'MACHINE\\Keiichiro'"
+                        "環境変数 MT5_TASK_RUN_USER にインタラクティブユーザー名を設定してください。"
+                        "例: 'Keiichiro'"
                     )
-                run_password = os.getenv('MT5_TASK_RUN_PASSWORD')
-                if not run_password:
-                    raise Exception("MT5_TASK_RUN_PASSWORD 環境変数にパスワードを設定してください")
                 # 開始時刻を現在時刻＋1分に設定
                 start_time = (datetime.now() + timedelta(minutes=1)).strftime("%H:%M")
-                # schtasks コマンド組み立て
+                # インタラクティブ実行タスクを作成（/RP を除外し /IT を追加）
                 schtasks_cmd = [
                     "schtasks", "/Create", "/TN", task_name,
-                    "/TR", f'"{bat_path}"',
+                    "/TR", f'\"{bat_path}\"',
                     "/SC", "ONCE", "/ST", start_time,
                     "/RL", "HIGHEST",
                     "/RU", run_user,
-                    "/RP", run_password,
+                    "/IT",
                     "/F"
                 ]
                 # タスクを登録して即時実行

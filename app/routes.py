@@ -19,6 +19,7 @@ import asyncio
 import json
 from datetime import datetime
 import logging
+import os, getpass
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -500,4 +501,24 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         try:
             await websocket.close(code=1011)
         except:
-            pass        
+            pass
+
+@router.get("/debug/whoami")
+def debug_whoami():
+    """このプロセスを動かしているOSユーザー情報を返します"""
+    user_login = None
+    try:
+        user_login = os.getlogin()
+    except Exception:
+        pass
+    ps_user = None
+    try:
+        import psutil
+        ps_user = psutil.Process(os.getpid()).username()
+    except Exception:
+        pass
+    return {
+        "os_getlogin": user_login,
+        "getpass_user": getpass.getuser(),
+        "psutil_user": ps_user
+    }        
