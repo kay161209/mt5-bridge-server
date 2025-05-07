@@ -439,7 +439,7 @@ class WorkerSession:
         res = json.loads(line)
         if not res.get("success"):
             raise Exception(res.get("error"))
-        return res.get("result")
+        return res
 
     def cleanup(self):
         """子プロセスの終了処理"""
@@ -589,4 +589,4 @@ def get_session_manager() -> SessionManager:
     """セッションマネージャーのインスタンスを取得する"""
     if _session_manager is None:
         init_session_manager()
-    return _session_manager  
+    return _session_manager    
