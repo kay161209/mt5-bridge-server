@@ -126,7 +126,14 @@ def main():
                         result_list = []
                     else:
                         result_list = [
-                            {"time": r['time'], "open": r['open'], "high": r['high'], "low": r['low'], "close": r['close'], "tick_volume": r['tick_volume']}
+                            {
+                                "time": int(r['time']) if hasattr(r['time'], 'item') else r['time'],
+                                "open": float(r['open']),
+                                "high": float(r['high']),
+                                "low": float(r['low']),
+                                "close": float(r['close']),
+                                "tick_volume": int(r['tick_volume']) if hasattr(r['tick_volume'], 'item') else r['tick_volume']
+                            }
                             for r in rates
                         ]
                     res.update({"success": True, "result": result_list})
@@ -190,4 +197,4 @@ if __name__ == "__main__":
             sys.stdout.flush()
         except:
             print(json.dumps(err_msg), flush=True)
-        sys.exit(1)       
+        sys.exit(1)         
