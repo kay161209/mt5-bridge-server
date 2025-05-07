@@ -91,68 +91,90 @@ def main():
         in_stream = sys.stdin
         out_stream = sys.stdout
 
-    for line in in_stream:
+    while True:
         try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if req.get("type") == "terminate":
-            break
-        cmd_type = req.get("type")
-        params = req.get("params", {})
-        res = {"type": cmd_type}
-        try:
-            if cmd_type == "candles":
-                symbol = params.get("symbol")
-                timeframe = params.get("timeframe")
-                tf = getattr(mt5, "TIMEFRAME_" + timeframe.upper()) if timeframe else None
-                count = params.get("count", 100)
-                start_time = params.get("start_time")
-                if start_time:
-                    rates = mt5.copy_rates_from(symbol, tf, start_time, count)
+            line = in_stream.readline()
+            if not line:  # EOF
+                break
+                
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError as e:
+                out_stream.write(json.dumps({"success": False, "error": f"JSONデコードエラー: {str(e)}"}) + "\n")
+                out_stream.flush()
+                continue
+                
+            if req.get("type") == "terminate":
+                break
+                
+            cmd_type = req.get("type")
+            params = req.get("params", {})
+            res = {"type": cmd_type}
+            
+            try:
+                if cmd_type == "candles":
+                    symbol = params.get("symbol")
+                    timeframe = params.get("timeframe")
+                    tf = getattr(mt5, "TIMEFRAME_" + timeframe.upper()) if timeframe else None
+                    count = params.get("count", 100)
+                    start_time = params.get("start_time")
+                    if start_time:
+                        rates = mt5.copy_rates_from(symbol, tf, start_time, count)
+                    else:
+                        rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
+                    if rates is None or len(rates) == 0:
+                        result_list = []
+                    else:
+                        result_list = [
+                            {"time": r['time'], "open": r['open'], "high": r['high'], "low": r['low'], "close": r['close'], "tick_volume": r['tick_volume']}
+                            for r in rates
+                        ]
+                    res.update({"success": True, "result": result_list})
+                elif cmd_type == "order_send":
+                    result = mt5.order_send(**params)
+                    if result is None:
+                        error = mt5.last_error()
+                        res.update({"success": False, "error": f"order_sendに失敗: {error}"})
+                    else:
+                        res.update({"success": True, "result": result._asdict()})
+                elif cmd_type == "quote":
+                    tick = mt5.symbol_info_tick(params.get("symbol"))
+                    if tick is None:
+                        error = mt5.last_error()
+                        res.update({"success": False, "error": f"quoteに失敗: {error}"})
+                    else:
+                        res.update({"success": True, "result": {"bid": tick.bid, "ask": tick.ask, "time": tick.time}})
+                elif cmd_type == "positions_get":
+                    result = mt5.positions_get(**params)
+                    positions_list = [pos._asdict() for pos in result] if result else []
+                    res.update({"success": True, "result": positions_list})
+                elif cmd_type == "symbol_select":
+                    symbol = params.get("symbol")
+                    enable = params.get("enable", True)
+                    ok = mt5.symbol_select(symbol, enable)
+                    if ok:
+                        res.update({"success": True, "result": None})
+                    else:
+                        error = mt5.last_error()
+                        res.update({"success": False, "error": f"symbol_selectに失敗: {error}"})
                 else:
-                    rates = mt5.copy_rates_from_pos(symbol, tf, 0, count)
-                if rates is None or len(rates) == 0:
-                    result_list = []
-                else:
-                    result_list = [
-                        {"time": r['time'], "open": r['open'], "high": r['high'], "low": r['low'], "close": r['close'], "tick_volume": r['tick_volume']}
-                        for r in rates
-                    ]
-                res.update({"success": True, "result": result_list})
-            elif cmd_type == "order_send":
-                result = mt5.order_send(**params)
-                if result is None:
-                    error = mt5.last_error()
-                    res.update({"success": False, "error": f"order_sendに失敗: {error}"})
-                else:
-                    res.update({"success": True, "result": result._asdict()})
-            elif cmd_type == "quote":
-                tick = mt5.symbol_info_tick(params.get("symbol"))
-                if tick is None:
-                    error = mt5.last_error()
-                    res.update({"success": False, "error": f"quoteに失敗: {error}"})
-                else:
-                    res.update({"success": True, "result": {"bid": tick.bid, "ask": tick.ask, "time": tick.time}})
-            elif cmd_type == "positions_get":
-                result = mt5.positions_get(**params)
-                positions_list = [pos._asdict() for pos in result] if result else []
-                res.update({"success": True, "result": positions_list})
-            elif cmd_type == "symbol_select":
-                symbol = params.get("symbol")
-                enable = params.get("enable", True)
-                ok = mt5.symbol_select(symbol, enable)
-                if ok:
-                    res.update({"success": True, "result": None})
-                else:
-                    error = mt5.last_error()
-                    res.update({"success": False, "error": f"symbol_selectに失敗: {error}"})
-            else:
-                res.update({"success": False, "error": f"不明なコマンド: {cmd_type}"})
+                    res.update({"success": False, "error": f"不明なコマンド: {cmd_type}"})
+            except Exception as e:
+                res.update({"success": False, "error": str(e)})
+                
+            out_stream.write(json.dumps(res) + "\n")
+            out_stream.flush()
         except Exception as e:
-            res.update({"success": False, "error": str(e)})
-        out_stream.write(json.dumps(res) + "\n")
-        out_stream.flush()
+            try:
+                error_msg = {"success": False, "error": f"予期せぬエラー: {str(e)}"}
+                out_stream.write(json.dumps(error_msg) + "\n")
+                out_stream.flush()
+            except Exception as write_err:
+                try:
+                    sys.stdout.write(json.dumps({"success": False, "error": f"エラーレスポンス送信に失敗: {str(write_err)}"}) + "\n")
+                    sys.stdout.flush()
+                except:
+                    pass
 
     mt5.shutdown()
     # MT5 terminal64.exe の終了は SessionManager で行います
@@ -164,9 +186,8 @@ if __name__ == "__main__":
         # 予期せぬ例外を親プロセスへ通知
         err_msg = {"type":"init","success":False,"error":str(e)}
         try:
-            out_stream.write(json.dumps(err_msg) + "\n")
-            out_stream.flush()
-        except:
             sys.stdout.write(json.dumps(err_msg) + "\n")
             sys.stdout.flush()
-        sys.exit(1) 
+        except:
+            print(json.dumps(err_msg), flush=True)
+        sys.exit(1)       

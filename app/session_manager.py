@@ -86,8 +86,12 @@ def configure_logger(name="session_manager", level=logging.DEBUG):
 def cleanup_resources():
     """プログラム終了時にリソースをクリーンアップする"""
     try:
-        # MT5接続をシャットダウン
-        mt5.shutdown()
+        # MT5接続をシャットダウン - 必要な場合のみインポート
+        try:
+            import MetaTrader5 as mt5
+            mt5.shutdown()
+        except ImportError:
+            pass
     except:
         pass
     
@@ -585,4 +589,4 @@ def get_session_manager() -> SessionManager:
     """セッションマネージャーのインスタンスを取得する"""
     if _session_manager is None:
         init_session_manager()
-    return _session_manager 
+    return _session_manager  
