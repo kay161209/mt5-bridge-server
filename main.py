@@ -114,7 +114,8 @@ logger.info(f"標準出力エンコーディング: {sys.stdout.encoding if hasa
 
 app = FastAPI(
     title="MT5 Bridge API",
-    version="1.0.0",
+    version="1.2.0",
+    description="MT5 Bridge API - 注意: /private/および/publicエンドポイントは非推奨です。代わりに/session/{session_id}/...形式のエンドポイントを使用してください。",
     docs_url="/docs", redoc_url="/redoc",
 )
 
@@ -217,6 +218,7 @@ async def cleanup_old_sessions():
         logger.error(f"Session cleanup error: {e}")
 
 # The following endpoints have been removed and replaced with session-based ones in app/routes.py
+# 
 # @app.post("/v5/private/order/create")
 # def place_order(req: dict, x_api_token: str | None = Header(None)):
 #     check_token(x_api_token)

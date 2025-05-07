@@ -20,6 +20,7 @@ import json
 from datetime import datetime
 import logging
 import os, getpass
+from functools import wraps
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,6 +29,23 @@ def check_token(x_api_token: str | None = Header(None)):
     """トークン認証"""
     if x_api_token != settings.bridge_token:
         raise HTTPException(status_code=401, detail="無効なトークンです")
+
+def get_session_or_404(session_id: str):
+    """セッションを取得、なければ404エラー"""
+    session = get_session_manager().get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    return session
+
+def deprecated(alternative_route: str):
+    """エンドポイントを非推奨としてマーク"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            logger.warning(f"非推奨のエンドポイントが使用されました。代わりに {alternative_route} を使用してください。")
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # ----- セッション管理エンドポイント ----- #
 
@@ -124,15 +142,15 @@ def session_order_create(session_id: str, req: OrderCreate, x_api_token: str | N
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
+    
     # MT5命令を送信
     params = req.dict()
     cmd_res = session.send_command({"type": "order_send", "params": params})
     if not cmd_res.get("success"):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     res = cmd_res.get("result") or {}
+    
     # retCode として retcode フィールドを利用
     return {"retCode": res.get("retcode", -1), "result": res}
 
@@ -142,9 +160,8 @@ def session_quote(session_id: str, symbol: str, x_api_token: str | None = Header
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
+    
     # MT5命令を送信
     cmd_res = session.send_command({"type": "quote", "params": {"symbol": symbol}})
     if not cmd_res.get("success"):
@@ -157,9 +174,8 @@ def session_get_candles(session_id: str, req: CandleRequest, x_api_token: str | 
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
+    
     # コマンド送信
     params: Dict[str, Any] = {
         "symbol": req.symbol,
@@ -240,15 +256,13 @@ def get_candles(req: CandleRequest, session_id: str, x_api_token: str | None = H
 
 # ---- 追加エンドポイント ---- #
 
-@router.post("/private/login")
-def login(req: LoginRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでログイン"""
+@router.post("/session/{session_id}/login")
+def session_login(session_id: str, req: LoginRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでログイン"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "login", "params": req.dict()})
@@ -256,15 +270,19 @@ def login(req: LoginRequest, session_id: str, x_api_token: str | None = Header(N
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"success": True}
 
-@router.get("/public/version", response_model=VersionResponse)
-def get_version(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでバージョン取得"""
+@router.post("/private/login")
+@deprecated("/session/{session_id}/login")
+def login(req: LoginRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでログイン (非推奨)"""
+    return session_login(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/version", response_model=VersionResponse)
+def session_get_version(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションでバージョン取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "version", "params": {}})
@@ -272,15 +290,19 @@ def get_version(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"version": cmd_res.get("result")}
 
-@router.get("/public/last_error", response_model=ErrorResponse)
-def get_last_error(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで最後のエラー取得"""
+@router.get("/public/version", response_model=VersionResponse)
+@deprecated("/session/{session_id}/version")
+def get_version(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでバージョン取得 (非推奨)"""
+    return session_get_version(session_id=session_id, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/last_error", response_model=ErrorResponse)
+def session_get_last_error(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションで最後のエラー取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "last_error", "params": {}})
@@ -288,15 +310,19 @@ def get_last_error(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.get("/private/account_info", response_model=AccountInfoResponse)
-def get_account_info(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでアカウント情報取得"""
+@router.get("/public/last_error", response_model=ErrorResponse)
+@deprecated("/session/{session_id}/last_error")
+def get_last_error(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで最後のエラー取得 (非推奨)"""
+    return session_get_last_error(session_id=session_id, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/account_info", response_model=AccountInfoResponse)
+def session_get_account_info(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションでアカウント情報取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "account_info", "params": {}})
@@ -304,15 +330,19 @@ def get_account_info(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.get("/public/terminal_info", response_model=TerminalInfoResponse)
-def get_terminal_info(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでターミナル情報取得"""
+@router.get("/private/account_info", response_model=AccountInfoResponse)
+@deprecated("/session/{session_id}/account_info")
+def get_account_info(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでアカウント情報取得 (非推奨)"""
+    return session_get_account_info(session_id=session_id, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/terminal_info", response_model=TerminalInfoResponse)
+def session_get_terminal_info(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションでターミナル情報取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "terminal_info", "params": {}})
@@ -320,15 +350,19 @@ def get_terminal_info(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.get("/public/symbols_total")
-def get_symbols_total(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでシンボル総数取得"""
+@router.get("/public/terminal_info", response_model=TerminalInfoResponse)
+@deprecated("/session/{session_id}/terminal_info")
+def get_terminal_info(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでターミナル情報取得 (非推奨)"""
+    return session_get_terminal_info(session_id=session_id, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/symbols_total")
+def session_get_symbols_total(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションでシンボル総数取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "symbols_total", "params": {}})
@@ -336,15 +370,19 @@ def get_symbols_total(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"total": cmd_res.get("result")}
 
-@router.post("/public/symbols")
-def get_symbols(session_id: str, x_api_token: str | None = Header(None), req: Optional[SymbolsRequest] = None):
-    """セッションベースでシンボル一覧取得"""
+@router.get("/public/symbols_total")
+@deprecated("/session/{session_id}/symbols_total")
+def get_symbols_total(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでシンボル総数取得 (非推奨)"""
+    return session_get_symbols_total(session_id=session_id, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/symbols")
+def session_get_symbols(session_id: str, x_api_token: str | None = Header(None), req: Optional[SymbolsRequest] = None):
+    """指定セッションでシンボル一覧取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {}
@@ -356,15 +394,19 @@ def get_symbols(session_id: str, x_api_token: str | None = Header(None), req: Op
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"symbols": cmd_res.get("result")}
 
-@router.post("/public/symbol_info", response_model=SymbolInfoResponse)
-def get_symbol_info(req: SymbolInfoRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでシンボル情報取得"""
+@router.post("/public/symbols")
+@deprecated("/session/{session_id}/symbols")
+def get_symbols(session_id: str, x_api_token: str | None = Header(None), req: Optional[SymbolsRequest] = None):
+    """セッションベースでシンボル一覧取得 (非推奨)"""
+    return session_get_symbols(session_id=session_id, x_api_token=x_api_token, req=req)
+
+@router.post("/session/{session_id}/symbol_info", response_model=SymbolInfoResponse)
+def session_get_symbol_info(session_id: str, req: SymbolInfoRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでシンボル情報取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "symbol_info", "params": {"symbol": req.symbol}})
@@ -372,15 +414,19 @@ def get_symbol_info(req: SymbolInfoRequest, session_id: str, x_api_token: str | 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/public/symbol_info_tick", response_model=SymbolTickResponse)
-def get_symbol_info_tick(req: SymbolInfoRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでシンボルティック情報取得"""
+@router.post("/public/symbol_info", response_model=SymbolInfoResponse)
+@deprecated("/session/{session_id}/symbol_info")
+def get_symbol_info(req: SymbolInfoRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでシンボル情報取得 (非推奨)"""
+    return session_get_symbol_info(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/symbol_info_tick", response_model=SymbolTickResponse)
+def session_get_symbol_info_tick(session_id: str, req: SymbolInfoRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでシンボルティック情報取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "symbol_info_tick", "params": {"symbol": req.symbol}})
@@ -388,15 +434,19 @@ def get_symbol_info_tick(req: SymbolInfoRequest, session_id: str, x_api_token: s
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/public/symbol_select")
-def symbol_select(req: SymbolSelectRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでシンボル選択"""
+@router.post("/public/symbol_info_tick", response_model=SymbolTickResponse)
+@deprecated("/session/{session_id}/symbol_info_tick")
+def get_symbol_info_tick(req: SymbolInfoRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでシンボルティック情報取得 (非推奨)"""
+    return session_get_symbol_info_tick(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/symbol_select")
+def session_symbol_select(session_id: str, req: SymbolSelectRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでシンボル選択"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "symbol_select", "params": req.dict()})
@@ -404,15 +454,19 @@ def symbol_select(req: SymbolSelectRequest, session_id: str, x_api_token: str | 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"success": True}
 
-@router.post("/public/market_book_add")
-def market_book_add(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで板情報追加"""
+@router.post("/public/symbol_select")
+@deprecated("/session/{session_id}/symbol_select")
+def symbol_select(req: SymbolSelectRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでシンボル選択 (非推奨)"""
+    return session_symbol_select(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/market_book_add")
+def session_market_book_add(session_id: str, req: MarketBookRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで板情報追加"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "market_book_add", "params": {"symbol": req.symbol}})
@@ -420,15 +474,19 @@ def market_book_add(req: MarketBookRequest, session_id: str, x_api_token: str | 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"success": True}
 
-@router.post("/public/market_book_get", response_model=MarketBookResponse)
-def market_book_get(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで板情報取得"""
+@router.post("/public/market_book_add")
+@deprecated("/session/{session_id}/market_book_add")
+def market_book_add(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで板情報追加 (非推奨)"""
+    return session_market_book_add(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/market_book_get", response_model=MarketBookResponse)
+def session_market_book_get(session_id: str, req: MarketBookRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで板情報取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "market_book_get", "params": {"symbol": req.symbol}})
@@ -436,15 +494,19 @@ def market_book_get(req: MarketBookRequest, session_id: str, x_api_token: str | 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"items": cmd_res.get("result")}
 
-@router.post("/public/market_book_release")
-def market_book_release(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで板情報解放"""
+@router.post("/public/market_book_get", response_model=MarketBookResponse)
+@deprecated("/session/{session_id}/market_book_get")
+def market_book_get(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで板情報取得 (非推奨)"""
+    return session_market_book_get(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/market_book_release")
+def session_market_book_release(session_id: str, req: MarketBookRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで板情報解放"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "market_book_release", "params": {"symbol": req.symbol}})
@@ -452,15 +514,19 @@ def market_book_release(req: MarketBookRequest, session_id: str, x_api_token: st
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"success": True}
 
-@router.post("/public/candles_range", response_model=CandleResponse)
-def get_candles_range(req: CandlesRangeRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで期間指定ローソク足データを取得"""
+@router.post("/public/market_book_release")
+@deprecated("/session/{session_id}/market_book_release")
+def market_book_release(req: MarketBookRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで板情報解放 (非推奨)"""
+    return session_market_book_release(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/candles_range", response_model=CandleResponse)
+def session_get_candles_range(session_id: str, req: CandlesRangeRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで期間指定ローソク足データを取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -475,15 +541,19 @@ def get_candles_range(req: CandlesRangeRequest, session_id: str, x_api_token: st
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"data": cmd_res.get("result")}
 
-@router.post("/public/ticks_from", response_model=TicksResponse)
-def get_ticks_from(req: TicksRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで指定日時以降のティックデータを取得"""
+@router.post("/public/candles_range", response_model=CandleResponse)
+@deprecated("/session/{session_id}/candles_range")
+def get_candles_range(req: CandlesRangeRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで期間指定ローソク足データを取得 (非推奨)"""
+    return session_get_candles_range(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/ticks_from", response_model=TicksResponse)
+def session_get_ticks_from(session_id: str, req: TicksRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで指定日時以降のティックデータを取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -498,15 +568,19 @@ def get_ticks_from(req: TicksRequest, session_id: str, x_api_token: str | None =
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"ticks": cmd_res.get("result")}
 
-@router.post("/public/ticks_range", response_model=TicksResponse)
-def get_ticks_range(req: TicksRangeRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで期間指定ティックデータを取得"""
+@router.post("/public/ticks_from", response_model=TicksResponse)
+@deprecated("/session/{session_id}/ticks_from")
+def get_ticks_from(req: TicksRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで指定日時以降のティックデータを取得 (非推奨)"""
+    return session_get_ticks_from(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/ticks_range", response_model=TicksResponse)
+def session_get_ticks_range(session_id: str, req: TicksRangeRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで期間指定ティックデータを取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -521,15 +595,19 @@ def get_ticks_range(req: TicksRangeRequest, session_id: str, x_api_token: str | 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"ticks": cmd_res.get("result")}
 
-@router.get("/private/orders_total")
-def get_orders_total(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文総数を取得"""
+@router.post("/public/ticks_range", response_model=TicksResponse)
+@deprecated("/session/{session_id}/ticks_range")
+def get_ticks_range(req: TicksRangeRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで期間指定ティックデータを取得 (非推奨)"""
+    return session_get_ticks_range(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/orders_total")
+def session_get_orders_total(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションで注文総数を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "orders_total", "params": {}})
@@ -537,21 +615,25 @@ def get_orders_total(session_id: str, x_api_token: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"total": cmd_res.get("result")}
 
-@router.post("/private/orders")
-def get_orders(
+@router.get("/private/orders_total")
+@deprecated("/session/{session_id}/orders_total")
+def get_orders_total(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文総数を取得 (非推奨)"""
+    return session_get_orders_total(session_id=session_id, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/orders")
+def session_get_orders(
     session_id: str,
     x_api_token: str | None = Header(None),
     symbol: Optional[str] = None, 
     group: Optional[str] = None, 
     ticket: Optional[int] = None
 ):
-    """セッションベースで注文一覧を取得"""
+    """指定セッションで注文一覧を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {}
@@ -567,8 +649,26 @@ def get_orders(
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"orders": cmd_res.get("result")}
 
-@router.post("/private/order_calc_margin")
-def order_calc_margin(
+@router.post("/private/orders")
+@deprecated("/session/{session_id}/orders")
+def get_orders(
+    session_id: str,
+    x_api_token: str | None = Header(None),
+    symbol: Optional[str] = None, 
+    group: Optional[str] = None, 
+    ticket: Optional[int] = None
+):
+    """セッションベースで注文一覧を取得 (非推奨)"""
+    return session_get_orders(
+        session_id=session_id, 
+        x_api_token=x_api_token,
+        symbol=symbol,
+        group=group,
+        ticket=ticket
+    )
+
+@router.post("/session/{session_id}/order_calc_margin")
+def session_order_calc_margin(
     session_id: str,
     action: int, 
     symbol: str, 
@@ -576,13 +676,11 @@ def order_calc_margin(
     price: float,
     x_api_token: str | None = Header(None)
 ):
-    """セッションベースで証拠金計算"""
+    """指定セッションで証拠金計算"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -597,8 +695,28 @@ def order_calc_margin(
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"margin": cmd_res.get("result")}
 
-@router.post("/private/order_calc_profit")
-def order_calc_profit(
+@router.post("/private/order_calc_margin")
+@deprecated("/session/{session_id}/order_calc_margin")
+def order_calc_margin(
+    session_id: str,
+    action: int, 
+    symbol: str, 
+    volume: float, 
+    price: float,
+    x_api_token: str | None = Header(None)
+):
+    """セッションベースで証拠金計算 (非推奨)"""
+    return session_order_calc_margin(
+        session_id=session_id,
+        action=action,
+        symbol=symbol,
+        volume=volume,
+        price=price,
+        x_api_token=x_api_token
+    )
+
+@router.post("/session/{session_id}/order_calc_profit")
+def session_order_calc_profit(
     session_id: str,
     action: int, 
     symbol: str, 
@@ -607,13 +725,11 @@ def order_calc_profit(
     price_close: float,
     x_api_token: str | None = Header(None)
 ):
-    """セッションベースで利益計算"""
+    """指定セッションで利益計算"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -629,15 +745,35 @@ def order_calc_profit(
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"profit": cmd_res.get("result")}
 
-@router.post("/private/order_check", response_model=OrderCheckResponse)
-def order_check(req: OrderRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文チェック"""
+@router.post("/private/order_calc_profit")
+@deprecated("/session/{session_id}/order_calc_profit")
+def order_calc_profit(
+    session_id: str,
+    action: int, 
+    symbol: str, 
+    volume: float, 
+    price_open: float,
+    price_close: float,
+    x_api_token: str | None = Header(None)
+):
+    """セッションベースで利益計算 (非推奨)"""
+    return session_order_calc_profit(
+        session_id=session_id,
+        action=action,
+        symbol=symbol,
+        volume=volume,
+        price_open=price_open,
+        price_close=price_close,
+        x_api_token=x_api_token
+    )
+
+@router.post("/session/{session_id}/order_check", response_model=OrderCheckResponse)
+def session_order_check(session_id: str, req: OrderRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで注文チェック"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "order_check", "params": req.dict()})
@@ -645,15 +781,19 @@ def order_check(req: OrderRequest, session_id: str, x_api_token: str | None = He
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/private/order_send", response_model=OrderSendResponse)
-def order_send(req: OrderRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文送信"""
+@router.post("/private/order_check", response_model=OrderCheckResponse)
+@deprecated("/session/{session_id}/order_check")
+def order_check(req: OrderRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文チェック (非推奨)"""
+    return session_order_check(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/order_send", response_model=OrderSendResponse)
+def session_order_send(session_id: str, req: OrderRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで注文送信"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "order_send", "params": req.dict()})
@@ -661,15 +801,19 @@ def order_send(req: OrderRequest, session_id: str, x_api_token: str | None = Hea
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.get("/private/positions_total")
-def get_positions_total(session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでポジション総数を取得"""
+@router.post("/private/order_send", response_model=OrderSendResponse)
+@deprecated("/session/{session_id}/order_send")
+def order_send(req: OrderRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文送信 (非推奨)"""
+    return session_order_send(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.get("/session/{session_id}/positions_total")
+def session_get_positions_total(session_id: str, x_api_token: str | None = Header(None)):
+    """指定セッションでポジション総数を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     cmd_res = session.send_command({"type": "positions_total", "params": {}})
@@ -677,15 +821,19 @@ def get_positions_total(session_id: str, x_api_token: str | None = Header(None))
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"total": cmd_res.get("result")}
 
-@router.post("/private/positions", response_model=PositionsResponse)
-def get_positions(req: PositionsRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでポジション一覧を取得"""
+@router.get("/private/positions_total")
+@deprecated("/session/{session_id}/positions_total")
+def get_positions_total(session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでポジション総数を取得 (非推奨)"""
+    return session_get_positions_total(session_id=session_id, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/positions", response_model=PositionsResponse)
+def session_get_positions(session_id: str, req: PositionsRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでポジション一覧を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -698,20 +846,24 @@ def get_positions(req: PositionsRequest, session_id: str, x_api_token: str | Non
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"positions": cmd_res.get("result")}
 
-@router.post("/private/history_orders_total")
-def get_history_orders_total(
+@router.post("/private/positions", response_model=PositionsResponse)
+@deprecated("/session/{session_id}/positions")
+def get_positions(req: PositionsRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでポジション一覧を取得 (非推奨)"""
+    return session_get_positions(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/history_orders_total")
+def session_get_history_orders_total(
     session_id: str,
     x_api_token: str | None = Header(None),
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None
 ):
-    """セッションベースで注文履歴総数を取得"""
+    """指定セッションで注文履歴総数を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {}
@@ -725,15 +877,29 @@ def get_history_orders_total(
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"total": cmd_res.get("result")}
 
-@router.post("/private/history_orders", response_model=HistoryOrdersResponse)
-def get_history_orders(req: HistoryOrdersRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文履歴を取得"""
+@router.post("/private/history_orders_total")
+@deprecated("/session/{session_id}/history_orders_total")
+def get_history_orders_total(
+    session_id: str,
+    x_api_token: str | None = Header(None),
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None
+):
+    """セッションベースで注文履歴総数を取得 (非推奨)"""
+    return session_get_history_orders_total(
+        session_id=session_id, 
+        x_api_token=x_api_token,
+        date_from=date_from,
+        date_to=date_to
+    )
+
+@router.post("/session/{session_id}/history_orders", response_model=HistoryOrdersResponse)
+def session_get_history_orders(session_id: str, req: HistoryOrdersRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで注文履歴を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -751,20 +917,24 @@ def get_history_orders(req: HistoryOrdersRequest, session_id: str, x_api_token: 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"orders": cmd_res.get("result")}
 
-@router.post("/private/history_deals_total")
-def get_history_deals_total(
+@router.post("/private/history_orders", response_model=HistoryOrdersResponse)
+@deprecated("/session/{session_id}/history_orders")
+def get_history_orders(req: HistoryOrdersRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文履歴を取得 (非推奨)"""
+    return session_get_history_orders(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/history_deals_total")
+def session_get_history_deals_total(
     session_id: str,
     x_api_token: str | None = Header(None),
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None
 ):
-    """セッションベースで約定履歴総数を取得"""
+    """指定セッションで約定履歴総数を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {}
@@ -778,15 +948,29 @@ def get_history_deals_total(
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"total": cmd_res.get("result")}
 
-@router.post("/private/history_deals", response_model=HistoryDealsResponse)
-def get_history_deals(req: HistoryDealsRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで約定履歴を取得"""
+@router.post("/private/history_deals_total")
+@deprecated("/session/{session_id}/history_deals_total")
+def get_history_deals_total(
+    session_id: str,
+    x_api_token: str | None = Header(None),
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None
+):
+    """セッションベースで約定履歴総数を取得 (非推奨)"""
+    return session_get_history_deals_total(
+        session_id=session_id, 
+        x_api_token=x_api_token,
+        date_from=date_from,
+        date_to=date_to
+    )
+
+@router.post("/session/{session_id}/history_deals", response_model=HistoryDealsResponse)
+def session_get_history_deals(session_id: str, req: HistoryDealsRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで約定履歴を取得"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -804,16 +988,20 @@ def get_history_deals(req: HistoryDealsRequest, session_id: str, x_api_token: st
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return {"deals": cmd_res.get("result")}
 
+@router.post("/private/history_deals", response_model=HistoryDealsResponse)
+@deprecated("/session/{session_id}/history_deals")
+def get_history_deals(req: HistoryDealsRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで約定履歴を取得 (非推奨)"""
+    return session_get_history_deals(session_id=session_id, req=req, x_api_token=x_api_token)
 
-@router.post("/private/position/close")
-def position_close(req: PositionCloseRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでポジションを閉じる"""
+
+@router.post("/session/{session_id}/position/close")
+def session_position_close(session_id: str, req: PositionCloseRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでポジションを閉じる"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -825,15 +1013,19 @@ def position_close(req: PositionCloseRequest, session_id: str, x_api_token: str 
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/private/position/close_partial")
-def position_close_partial(req: PositionClosePartialRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでポジションを部分的に閉じる"""
+@router.post("/private/position/close")
+@deprecated("/session/{session_id}/position/close")
+def position_close(req: PositionCloseRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでポジションを閉じる (非推奨)"""
+    return session_position_close(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/position/close_partial")
+def session_position_close_partial(session_id: str, req: PositionClosePartialRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでポジションを部分的に閉じる"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -845,15 +1037,19 @@ def position_close_partial(req: PositionClosePartialRequest, session_id: str, x_
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/private/position/modify")
-def position_modify(req: PositionModifyRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースでポジションのSL/TPを変更する"""
+@router.post("/private/position/close_partial")
+@deprecated("/session/{session_id}/position/close_partial")
+def position_close_partial(req: PositionClosePartialRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでポジションを部分的に閉じる (非推奨)"""
+    return session_position_close_partial(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/position/modify")
+def session_position_modify(session_id: str, req: PositionModifyRequest, x_api_token: str | None = Header(None)):
+    """指定セッションでポジションのSL/TPを変更する"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -866,16 +1062,20 @@ def position_modify(req: PositionModifyRequest, session_id: str, x_api_token: st
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
+@router.post("/private/position/modify")
+@deprecated("/session/{session_id}/position/modify")
+def position_modify(req: PositionModifyRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースでポジションのSL/TPを変更する (非推奨)"""
+    return session_position_modify(session_id=session_id, req=req, x_api_token=x_api_token)
 
-@router.post("/private/order/cancel")
-def order_cancel(req: OrderCancelRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文をキャンセルする"""
+
+@router.post("/session/{session_id}/order/cancel")
+def session_order_cancel(session_id: str, req: OrderCancelRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで注文をキャンセルする"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -886,15 +1086,19 @@ def order_cancel(req: OrderCancelRequest, session_id: str, x_api_token: str | No
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
 
-@router.post("/private/order/modify")
-def order_modify(req: OrderModifyRequest, session_id: str, x_api_token: str | None = Header(None)):
-    """セッションベースで注文を変更する"""
+@router.post("/private/order/cancel")
+@deprecated("/session/{session_id}/order/cancel")
+def order_cancel(req: OrderCancelRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文をキャンセルする (非推奨)"""
+    return session_order_cancel(session_id=session_id, req=req, x_api_token=x_api_token)
+
+@router.post("/session/{session_id}/order/modify")
+def session_order_modify(session_id: str, req: OrderModifyRequest, x_api_token: str | None = Header(None)):
+    """指定セッションで注文を変更する"""
     check_token(x_api_token)
     
     # セッションを取得
-    session = get_session_manager().get_session(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail=f"セッション {session_id} が見つかりません")
+    session = get_session_or_404(session_id)
     
     # MT5命令を送信
     params = {
@@ -908,6 +1112,12 @@ def order_modify(req: OrderModifyRequest, session_id: str, x_api_token: str | No
     if not cmd_res.get("success"):
         raise HTTPException(status_code=500, detail=cmd_res.get("error"))
     return cmd_res.get("result")
+
+@router.post("/private/order/modify")
+@deprecated("/session/{session_id}/order/modify")
+def order_modify(req: OrderModifyRequest, session_id: str, x_api_token: str | None = Header(None)):
+    """セッションベースで注文を変更する (非推奨)"""
+    return session_order_modify(session_id=session_id, req=req, x_api_token=x_api_token)
 
 # ---- WebSocket ---- #
 
@@ -978,4 +1188,4 @@ def debug_whoami():
         "os_getlogin": user_login,
         "getpass_user": getpass.getuser(),
         "psutil_user": ps_user
-    }                                                                                                                                
+    }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
