@@ -114,8 +114,8 @@ logger.info(f"標準出力エンコーディング: {sys.stdout.encoding if hasa
 
 app = FastAPI(
     title="MT5 Bridge API",
-    version="1.2.0",
-    description="MT5 Bridge API - 注意: /private/および/publicエンドポイントは非推奨です。代わりに/session/{session_id}/...形式のエンドポイントを使用してください。",
+    version="1.3.0",
+    description="MT5 Bridge API - /session/{session_id}/...形式のエンドポイントのみ使用可能です。/private/および/publicエンドポイントは削除されました。",
     docs_url="/docs", redoc_url="/redoc",
 )
 
