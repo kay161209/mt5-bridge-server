@@ -104,7 +104,13 @@ class MT5SessionProcess:
         Returns:
             Dict[str, Any]: コマンドの実行結果
         """
+        if not command or not isinstance(command, dict):
+            return {'success': False, 'error': '無効なコマンド形式'}
+            
         cmd_type = command.get('type')
+        if not cmd_type:
+            return {'success': False, 'error': 'コマンドタイプが指定されていません'}
+            
         params = command.get('params', {})
         
         try:
@@ -232,19 +238,24 @@ class MT5SessionProcess:
         """メインループ - コマンドの受信と実行"""
         try:
             while True:
-                if self.connection.poll(timeout=1.0):  # タイムアウト付きで待機
-                    command = self.connection.recv()
-                    
-                    if command.get('type') == 'terminate':
-                        break
-                    
-                    result = self.handle_command(command)
-                    self.connection.send(result)
-                
-        except EOFError:
-            self.logger.info("親プロセスとの接続が閉じられました")
-        except Exception as e:
-            self.logger.error(f"予期せぬエラー: {e}")
+                try:
+                    if self.connection.poll(timeout=1.0):  # タイムアウト付きで待機
+                        command = self.connection.recv()
+                        
+                        if command.get('type') == 'terminate':
+                            break
+                        
+                        result = self.handle_command(command)
+                        self.connection.send(result)
+                except EOFError:
+                    self.logger.info("親プロセスとの接続が閉じられました")
+                    break
+                except Exception as e:
+                    self.logger.error(f"コマンド実行中にエラーが発生しましたが、プロセスは継続します: {e}", exc_info=True)
+                    try:
+                        self.connection.send({'success': False, 'error': f"コマンド実行エラー: {str(e)}"})
+                    except Exception as send_err:
+                        self.logger.error(f"エラーレスポンス送信に失敗: {send_err}")
         finally:
             self.cleanup()
             self.logger.info("MT5セッションプロセスを終了します")
@@ -271,4 +282,4 @@ if __name__ == '__main__':
     mt5_path = sys.argv[2]
     parent_conn, child_conn = Pipe()
     
-    start_session_process(session_id, mt5_path, child_conn) 
+    start_session_process(session_id, mt5_path, child_conn)    
