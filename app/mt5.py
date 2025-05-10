@@ -228,6 +228,32 @@ def get_candles(symbol: str, timeframe: str, count: int = 100, start_time: Optio
         "MN1": mt5.TIMEFRAME_MN1
     }
     
+    # MT5のタイムフレームをPandasのタイムフレームに変換
+    tf_to_pandas = {
+        "M1": "1min",
+        "M5": "5min",
+        "M15": "15min",
+        "M30": "30min",
+        "H1": "1H",
+        "H4": "4H",
+        "D1": "1D",
+        "W1": "1W",
+        "MN1": "1M"
+    }
+    
+    # Pandasのタイムフレームを取得
+    def get_pandas_timeframe(timeframe: str) -> str:
+        """
+        MT5のタイムフレーム文字列をPandasのリサンプリング用タイムフレーム文字列に変換
+        
+        Args:
+            timeframe: MT5タイムフレーム (例: "M1", "M5", "H1")
+            
+        Returns:
+            Pandasのタイムフレーム (例: "1min", "5min", "1H")
+        """
+        return tf_to_pandas.get(timeframe.upper(), "1min")
+    
     tf = tf_dict.get(timeframe.upper())
     if tf is None:
         raise ValueError(f"不正なタイムフレーム: {timeframe}。有効なタイムフレーム: {', '.join(tf_dict.keys())}")

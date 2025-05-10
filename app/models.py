@@ -26,6 +26,7 @@ class CandleData(BaseModel):
     low: float
     close: float
     tick_volume: float
+    pandas_timeframe: Optional[str] = None
 
 class CandleResponse(BaseModel):
     data: List[CandleData]

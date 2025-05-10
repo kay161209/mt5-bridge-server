@@ -159,9 +159,24 @@ class MT5SessionProcess:
                     'M30': mt5.TIMEFRAME_M30, 'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4,
                     'D1': mt5.TIMEFRAME_D1, 'W1': mt5.TIMEFRAME_W1, 'MN1': mt5.TIMEFRAME_MN1
                 }
+                
+                # MT5のタイムフレームをPandasのタイムフレームに変換
+                tf_to_pandas = {
+                    'M1': '1min',
+                    'M5': '5min',
+                    'M15': '15min',
+                    'M30': '30min',
+                    'H1': '1H',
+                    'H4': '4H',
+                    'D1': '1D',
+                    'W1': '1W',
+                    'MN1': '1M'
+                }
+                
                 tf = tf_map.get(timeframe.upper()) if timeframe else None
                 if tf is None:
                     return {'success': False, 'error': f'不正なタイムフレーム: {timeframe}'}
+                
                 # データ取得
                 if start_time:
                     rates = mt5.copy_rates_from(symbol, tf, start_time, count)
@@ -176,7 +191,8 @@ class MT5SessionProcess:
                         'time': datetime.fromtimestamp(r['time']).isoformat(),
                         'open': r['open'], 'high': r['high'],
                         'low': r['low'], 'close': r['close'],
-                        'tick_volume': r['tick_volume']
+                        'tick_volume': r['tick_volume'],
+                        'pandas_timeframe': tf_to_pandas.get(timeframe.upper(), '1min')  # Pandasのタイムフレームを追加
                     })
                 return {'success': True, 'result': result}
             
@@ -189,6 +205,59 @@ class MT5SessionProcess:
                     return {'success': False, 'error': f'quoteに失敗: {error}'}
                 return {'success': True, 'result': {'bid': tick.bid, 'ask': tick.ask, 'time': tick.time}}
             
+            elif cmd_type == 'candles_range':
+                # 期間指定ローソク足データを取得
+                symbol = params.get('symbol')
+                timeframe = params.get('timeframe')
+                date_from = params.get('date_from')
+                date_to = params.get('date_to')
+                
+                # タイムフレーム文字列を定数に変換
+                tf_map = {
+                    'M1': mt5.TIMEFRAME_M1, 'M5': mt5.TIMEFRAME_M5, 'M15': mt5.TIMEFRAME_M15,
+                    'M30': mt5.TIMEFRAME_M30, 'H1': mt5.TIMEFRAME_H1, 'H4': mt5.TIMEFRAME_H4,
+                    'D1': mt5.TIMEFRAME_D1, 'W1': mt5.TIMEFRAME_W1, 'MN1': mt5.TIMEFRAME_MN1
+                }
+                
+                # MT5のタイムフレームをPandasのタイムフレームに変換
+                tf_to_pandas = {
+                    'M1': '1min',
+                    'M5': '5min',
+                    'M15': '15min',
+                    'M30': '30min',
+                    'H1': '1H',
+                    'H4': '4H',
+                    'D1': '1D',
+                    'W1': '1W',
+                    'MN1': '1M'
+                }
+                
+                tf = tf_map.get(timeframe.upper()) if timeframe else None
+                if tf is None:
+                    return {'success': False, 'error': f'不正なタイムフレーム: {timeframe}'}
+                
+                # Unix時間からdatetimeに変換
+                if date_from:
+                    date_from = datetime.fromtimestamp(date_from)
+                if date_to:
+                    date_to = datetime.fromtimestamp(date_to)
+                
+                # データ取得
+                rates = mt5.copy_rates_range(symbol, tf, date_from, date_to)
+                if rates is None or len(rates) == 0:
+                    return {'success': True, 'result': []}
+                
+                # データ整形
+                result = []
+                for r in rates:
+                    result.append({
+                        'time': datetime.fromtimestamp(r['time']).isoformat(),
+                        'open': r['open'], 'high': r['high'],
+                        'low': r['low'], 'close': r['close'],
+                        'tick_volume': r['tick_volume'],
+                        'pandas_timeframe': tf_to_pandas.get(timeframe.upper(), '1min')  # Pandasのタイムフレームを追加
+                    })
+                return {'success': True, 'result': result}
             return {'success': False, 'error': f'不明なコマンド: {cmd_type}'}
             
         except Exception as e:
