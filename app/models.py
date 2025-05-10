@@ -15,7 +15,7 @@ class OrderResponse(BaseModel):
 
 class CandleRequest(BaseModel):
     symbol: str
-    timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+    timeframe: Literal["1min", "5min", "15min", "30min", "1h", "4h", "1d", "1w", "1m"]
     count: int = Field(gt=0, le=1000, default=100)
     start_time: Optional[datetime] = None
 
@@ -355,7 +355,7 @@ class HistoryDealsResponse(BaseModel):
 
 class CandlesRangeRequest(BaseModel):
     symbol: str
-    timeframe: Literal["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+    timeframe: Literal["1min", "5min", "15min", "30min", "1h", "4h", "1d", "1w", "1m"]
     date_from: datetime
     date_to: datetime
 
